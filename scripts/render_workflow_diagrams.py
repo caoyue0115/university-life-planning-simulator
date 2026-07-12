@@ -144,16 +144,22 @@ def main():
     files = sorted([WORKFLOWS / "README.md", *WORKFLOWS.glob("WF-??-*.md")])
     for markdown_path in files:
         text = markdown_path.read_text(encoding="utf-8")
-        mermaid = re.search(r"```mermaid\s*\n([\s\S]*?)```", text)
-        image_ref = re.search(r"!\[[^]]*\]\((images/[^)]+\.png)\)", text)
-        if not mermaid or not image_ref:
+        mermaids = re.findall(r"```mermaid\s*\n([\s\S]*?)```", text)
+        image_refs = re.findall(r"!\[[^]]*\]\((images/[^)]+\.png)\)", text)
+        if not mermaids or not image_refs:
             raise RuntimeError(f"{markdown_path.name}: missing Mermaid block or PNG reference")
-        nodes, edges = parse_flowchart(mermaid.group(1))
-        if not nodes or not edges:
-            raise RuntimeError(f"{markdown_path.name}: diagram has no nodes or edges")
-        output = WORKFLOWS / image_ref.group(1)
-        render(nodes, edges, output)
-        print(f"{markdown_path.name} -> {output.relative_to(ROOT)}")
+        if len(mermaids) != len(image_refs):
+            raise RuntimeError(
+                f"{markdown_path.name}: Mermaid/image count mismatch "
+                f"({len(mermaids)} Mermaid blocks, {len(image_refs)} image references)"
+            )
+        for mermaid, image_ref in zip(mermaids, image_refs):
+            nodes, edges = parse_flowchart(mermaid)
+            if not nodes or not edges:
+                raise RuntimeError(f"{markdown_path.name}: diagram has no nodes or edges")
+            output = WORKFLOWS / image_ref
+            render(nodes, edges, output)
+            print(f"{markdown_path.name} -> {output.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

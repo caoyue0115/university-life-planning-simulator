@@ -17,9 +17,9 @@
 | WF | 数据库节点 | 表 | 操作 | 必要输入 | 主要输出/用途 |
 |---|---|---|---|---|---|
 | WF-01 / N01 | 读取正式画像及待确认草稿 | `user_profiles` | 自定义 SQL 查询 | `N00.uid` | `isSuccess,message,outputList` |
-| WF-01 / N11 | 更新待确认画像 | `user_profiles` | 表单处理数据：更新 | `N00.uid,N05.profile_json,N09.confirmation_token` | `isSuccess,message,outputList` |
-| WF-01 / N13 | 新建待确认画像 | `user_profiles` | 表单处理数据：新增 | `N00.uid,N05.profile_json,N09.confirmation_token` | `isSuccess,message,outputList` |
-| WF-01 / N19 | 确认并写入正式画像 | `user_profiles` | 表单处理数据：更新 | `N00.uid,N03.pending_profile_json,N17.next_record_version` | `isSuccess,message,outputList` |
+| WF-01 / N11 | 更新待确认画像 | `user_profiles` | 表单处理数据：更新 | 范围：`N03.record_id,N00.uid`；更新：`N09.pending_profile_json,N09.new_confirmation_token,N09.pending_status,N09.updated_at` | `isSuccess,message,outputList` |
+| WF-01 / N13 | 新建待确认画像 | `user_profiles` | 表单处理数据：新增 | `N09.pending_profile_json,N09.new_confirmation_token,N09.pending_status,N09.updated_at`；正式画像 `{}`；版本 `0` | `isSuccess,message,outputList` |
+| WF-01 / N19 | 确认并写入正式画像 | `user_profiles` | 表单处理数据：更新 | 范围：`N03.record_id,N00.uid,N03.stored_confirmation_token`；更新：`N03.pending_profile_json,N17.next_record_version,N17.confirmed_at` | `isSuccess,message,outputList` |
 | WF-01 / N21 | 回读正式画像 | `user_profiles` | 自定义 SQL 查询 | `N00.uid` | `isSuccess,message,outputList`，交给 N23 核验 |
 | WF-02 | 读取模拟状态 | `simulation_states` | 查询 | `uid,workflow_id=WF-02` | `state_json,pending_item_json` |
 | WF-02 | 保存待回答事件 | `simulation_states` | 插入或更新 | `uid,state_id,pending_item_json` | 下一轮续接 |

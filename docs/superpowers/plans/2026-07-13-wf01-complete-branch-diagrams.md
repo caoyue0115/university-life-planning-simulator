@@ -27,15 +27,15 @@
 - Consumes: ordered Mermaid blocks and ordered `images/*.png` references in each workflow guide.
 - Produces: one deterministic PNG per Mermaid/image pair.
 
-- [ ] **Step 1: Change the renderer to collect all Mermaid blocks and PNG references**
+- [x] **Step 1: Change the renderer to collect all Mermaid blocks and PNG references**
 
 Use `re.findall` for both collections and reject missing or unequal pair counts.
 
-- [ ] **Step 2: Render every pair in document order**
+- [x] **Step 2: Render every pair in document order**
 
 Parse and render each Mermaid block to its corresponding image reference.
 
-- [ ] **Step 3: Run the renderer**
+- [x] **Step 3: Run the renderer**
 
 Run: `python scripts/render_workflow_diagrams.py`
 
@@ -52,15 +52,15 @@ Expected: exit 0 and two WF-01 image output lines.
 - Consumes: node contract N00–N30.
 - Produces: a complete draft/modify graph and a complete confirmation graph.
 
-- [ ] **Step 1: Write the draft/modify Mermaid graph**
+- [x] **Step 1: Write the draft/modify Mermaid graph**
 
 Include N02 and N07 failure exits, N08 draft/modify/cancel/default exits, N10 true/false exits, N12 and N14 true/false exits, and N15/N16/N27/N28/N29 to N30.
 
-- [ ] **Step 2: Write the confirmation Mermaid graph**
+- [x] **Step 2: Write the confirmation Mermaid graph**
 
 Include N18, N20, N22, and N24 true/false exits and N25/N26/N27 to N30.
 
-- [ ] **Step 3: Remove the incomplete-main-graph disclaimer**
+- [x] **Step 3: Remove the incomplete-main-graph disclaimer**
 
 State that both diagrams are authoritative and must be reproduced exactly.
 
@@ -75,21 +75,20 @@ State that both diagrams are authoritative and must be reproduced exactly.
 - Consumes: final Markdown and PNGs.
 - Produces: evidence that required edges and artifacts exist.
 
-- [ ] **Step 1: Assert required Mermaid edges**
+- [x] **Step 1: Assert required Mermaid edges**
 
 Check N12/N14 yes→N15 and no→N16; N20 yes→N21 and no→N26; N15/N16/N25/N26→N30.
 
-- [ ] **Step 2: Run repository formatting checks**
+- [x] **Step 2: Run repository formatting checks**
 
 Run: `git diff --check`
 
 Expected: exit 0.
 
-- [ ] **Step 3: Visually inspect both PNG files**
+- [x] **Step 3: Visually inspect both PNG files**
 
 Expected: labels are readable, no branch appears to terminate in empty space, and no line visually enters the wrong node.
 
-- [ ] **Step 4: Commit and push**
+- [x] **Step 4: Commit and push**
 
 Commit message: `docs: make wf01 branch diagrams complete`
-

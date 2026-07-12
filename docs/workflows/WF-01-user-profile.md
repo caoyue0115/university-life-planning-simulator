@@ -69,47 +69,62 @@ WF-01 已经通过变量提取器和代码节点得到明确字段，例如 `isS
 
 如果画布上的 N02 已经拖成“决策”，请删除它，然后从左侧“逻辑”分类重新拖入“分支器”，重命名为 `N02 分支器：数据库读取成功?`。
 
-## 3. 主流程画布和节点编号
+## 3. 两轮完整画布和节点编号
 
-![WF-01 用户画像完整配置图](images/WF-01-user-profile.png)
+以下两张图共同组成 WF-01，都是搭建依据。第一张从 N00 开始；当 N08=`confirm` 时进入第二张的 N17。图中每个“否”分支和每个消息节点都明确画出终点。
+
+### 3.1 草稿生成/修改轮完整图
+
+![WF-01 草稿生成轮完整图](images/WF-01-draft-round.png)
 
 ```mermaid
 flowchart TD
-    N00["N00 开始"] --> N01["N01 数据库：读取正式画像及待确认草稿"]
-    N01 --> N02{"N02 分支器：数据库读取成功?"}
+    N00["N00 开始"] --> N01["N01 数据库：读取画像和草稿"]
+    N01 --> N02{"N02 分支器：读取成功?"}
+    N02 -->|否| N28["N28 消息：读取失败"] --> N30["N30 结束"]
     N02 -->|是| N03["N03 代码：整理查询结果"]
-    N03 --> N04["N04 大模型：识别动作并生成/合并画像"]
-    N04 --> N05["N05 变量提取器：提取模型 JSON"]
+    N03 --> N04["N04 大模型：识别动作并生成画像"]
+    N04 --> N05["N05 变量提取器"]
     N05 --> N06["N06 代码：校验模型结果"]
-    N06 --> N07{"N07 分支器：模型结果有效?"}
+    N06 --> N07{"N07 分支器：结果有效?"}
+    N07 -->|否| N29["N29 消息：画像解析失败"] --> N30
     N07 -->|是| N08{"N08 分支器：requested_action"}
-    N08 -->|draft 或 modify| N09["N09 代码：准备 pending 草稿和 token"]
-    N09 --> N10{"N10 分支器：已有画像记录?"}
-    N10 -->|是| N11["N11 数据库：更新 pending 草稿"] --> N12{"N12 分支器：更新 pending 成功?"}
-    N10 -->|否| N13["N13 数据库：新增 pending 草稿"] --> N14{"N14 分支器：新增 pending 成功?"}
-    N12 -->|是| N15["N15 消息：展示草稿并请求确认"]
+    N08 -->|draft/modify| N09["N09 代码：准备草稿和 token"]
+    N08 -->|confirm| N17["转入确认轮：N17"]
+    N08 -->|cancel| N27["N27 消息：用户取消"] --> N30
+    N08 -->|默认| N29
+    N09 --> N10{"N10 分支器：已有记录?"}
+    N10 -->|是| N11["N11 数据库：更新 pending 草稿"]
+    N11 --> N12{"N12 分支器：更新成功?"}
+    N10 -->|否| N13["N13 数据库：新增 pending 草稿"]
+    N13 --> N14{"N14 分支器：新增成功?"}
+    N12 -->|是| N15["N15 消息：展示草稿并请求确认"] --> N30
     N14 -->|是| N15
-    N08 -->|confirm| N17["N17 代码：校验 pending 和确认 token"]
-    N17 --> N18{"N18 分支器：确认有效?"}
-    N18 -->|是| N19["N19 数据库：写入正式画像"]
-    N19 --> N20{"N20 分支器：正式写入成功?"}
-    N20 -->|是| N21["N21 数据库：回读正式画像"]
-    N21 --> N22{"N22 分支器：回读 SQL 成功?"}
-    N22 -->|是| N23["N23 代码：比较写入和回读结果"]
-    N23 --> N24{"N24 分支器：回读一致?"}
-    N24 -->|是| N25["N25 消息：正式画像保存成功"] --> N30["N30 结束"]
+    N12 -->|否| N16["N16 消息：草稿未保存"] --> N30
+    N14 -->|否| N16
 ```
 
-为防止大量结束回线在图片中交叉，主图只画 `draft/modify` 与 `confirm` 两条正常路径。N15 和 N25 显示消息后都连接 N30。其他出口严格按下表连接：
+### 3.2 正式确认轮完整图
 
-| 来源 | 失败条件 | 去向 |
-|---|---|---|
-| N02 | `isSuccess=false` | N28 → N30 |
-| N07 | `valid=false` | N29 → N30 |
-| N12、N14 | `isSuccess=false` | N16 → N30 |
-| N18 | `confirmation_valid=false` | N27 → N30 |
-| N20、N22、N24 | 判断为失败 | N26 → N30 |
-| N08 | `requested_action=cancel` | N27 → N30 |
+![WF-01 正式确认轮完整图](images/WF-01-confirm-round.png)
+
+```mermaid
+flowchart TD
+    N17["N17 代码：校验草稿和 token"] --> N18{"N18 分支器：确认有效?"}
+    N18 -->|否| N27["N27 消息：确认无效或草稿过期"] --> N30["N30 结束"]
+    N18 -->|是| N19["N19 数据库：写入正式画像"]
+    N19 --> N20{"N20 分支器：正式写入成功?"}
+    N20 -->|否| N26["N26 消息：正式画像未保存"] --> N30
+    N20 -->|是| N21["N21 数据库：回读正式画像"]
+    N21 --> N22{"N22 分支器：回读 SQL 成功?"}
+    N22 -->|否| N26
+    N22 -->|是| N23["N23 代码：比较写入和回读"]
+    N23 --> N24{"N24 分支器：回读一致?"}
+    N24 -->|否| N26
+    N24 -->|是| N25["N25 消息：正式画像保存成功"] --> N30
+```
+
+两张图中的 N27 和 N30 是同一批画布节点，不需要重复拖入。第二张只是把确认路径单独放大展示。
 
 ## 4. 先按编号拖入节点
 
@@ -563,51 +578,68 @@ false → N13 新增 pending
 
 ## 15. N11 数据库：更新 pending 草稿
 
-```text
-模式：表单处理数据
-数据库：university
-数据表：user_profiles
-操作：修改/更新数据
-```
+### 15.1 模式
 
-筛选条件：
-
-```text
-id = N03.record_id
-uid = N00.uid
-```
-
-字段映射：
-
-| 表字段 | 引用 |
+| 页面字段 | 选择内容 |
 |---|---|
-| `pending_profile_json` | N09.pending_profile_json |
-| `confirmation_token` | N09.new_confirmation_token |
-| `pending_status` | N09.pending_status |
-| `record_version` | N03.record_version；不在草稿阶段增加 |
-| `updated_at` | N09.updated_at |
+| 模式页签 | 表单处理数据 |
+| 选择数据表 | `university / user_profiles` |
+| 处理模式 | 更新数据 |
+
+### 15.2 设置数据范围
+
+这里决定“更新哪一行”。点击“+ 添加”配置两条；两条同时满足，即 AND：
+
+| 表字段 | 选择条件 | 比较类型 | 比较值 |
+|---|---|---|---|
+| `id` | 等于 | 引用 | N03 / record_id |
+| `uid` | 等于 | 引用 | N00 / uid |
+
+不要把“比较类型”设置成固定值，因为右侧值来自上游节点。
+
+### 15.3 设置更新数据
+
+在“设置更新数据”中点击“+ 添加”，逐行配置：
+
+| 参数名 | 类型 | 值 |
+|---|---|---|
+| `pending_profile_json` | 引用 | N09 / pending_profile_json |
+| `confirmation_token` | 引用 | N09 / new_confirmation_token |
+| `pending_status` | 引用 | N09 / pending_status |
+| `updated_at` | 引用 | N09 / updated_at |
+
+草稿阶段不修改 `profile_json` 和 `record_version`，所以不要把它们加入“设置更新数据”。
+
+### 15.4 输出
+
+平台固定输出 `isSuccess`、`message`、`outputList`，无需手工新增。
 
 N12 判断 `N11.isSuccess`：true → N15；false → N16。
 
 ## 16. N13 数据库：新增 pending 草稿
 
-```text
-模式：表单处理数据
-数据库：university
-数据表：user_profiles
-操作：新增数据
-```
+### 16.1 模式
 
-平台自动写入 `uid` 时，不要在字段映射里重复写 uid；如果表单明确要求 uid，则引用 `N00.uid`。
-
-| 表字段 | 引用/固定值 |
+| 页面字段 | 选择内容 |
 |---|---|
-| `pending_profile_json` | N09.pending_profile_json |
-| `confirmation_token` | N09.new_confirmation_token |
-| `pending_status` | N09.pending_status |
-| `profile_json` | 固定 `{}` |
-| `record_version` | 固定 `0` |
-| `updated_at` | N09.updated_at |
+| 模式页签 | 表单处理数据 |
+| 选择数据表 | `university / user_profiles` |
+| 处理模式 | 新增数据 |
+
+新增数据不需要“设置数据范围”。在页面的“设置新增数据”中逐行添加：
+
+| 参数名 | 类型 | 值 |
+|---|---|---|
+| `pending_profile_json` | 引用 | N09 / pending_profile_json |
+| `confirmation_token` | 引用 | N09 / new_confirmation_token |
+| `pending_status` | 引用 | N09 / pending_status |
+| `profile_json` | 固定值/常量 | `{}` |
+| `record_version` | 固定值/常量 | `0` |
+| `updated_at` | 引用 | N09 / updated_at |
+
+`id`、`uid`、`create_time` 是平台自动字段，不要添加。如果你实际页面把 `uid` 标为必须填写而不是自动生成，再额外添加 `uid｜引用｜N00 / uid`。
+
+平台固定输出 `isSuccess`、`message`、`outputList`。
 
 N14 判断 `N13.isSuccess`：true → N15；false → N16。
 
@@ -663,7 +695,8 @@ const valid = Boolean(has_record)
 
 return {
   confirmation_valid: valid,
-  next_record_version: Number(record_version || 0) + 1
+  next_record_version: Number(record_version || 0) + 1,
+  confirmed_at: new Date().toISOString()
 };
 ```
 
@@ -673,6 +706,7 @@ N17 输出区域：
 |---|---|---|
 | `confirmation_valid` | Boolean | 待确认草稿与传入 token 是否通过校验。 |
 | `next_record_version` | Integer | 正式写入时使用的新版本号。 |
+| `confirmed_at` | String | 正式确认时间，供 N19 更新 updated_at。 |
 
 N18：
 
@@ -683,31 +717,36 @@ false → N27
 
 ## 19. N19 数据库：写入正式画像
 
-```text
-模式：表单处理数据
-数据库：university
-数据表：user_profiles
-操作：修改/更新数据
-```
+### 19.1 模式
 
-条件：
-
-```text
-id = N03.record_id
-uid = N00.uid
-confirmation_token = N03.stored_confirmation_token
-```
-
-字段：
-
-| 表字段 | 值 |
+| 页面字段 | 选择内容 |
 |---|---|
-| `profile_json` | N03.pending_profile_json |
-| `pending_profile_json` | `{}` |
-| `confirmation_token` | 空字符串 |
-| `pending_status` | `confirmed` |
-| `record_version` | N17.next_record_version |
-| `updated_at` | 当前时间 |
+| 模式页签 | 表单处理数据 |
+| 选择数据表 | `university / user_profiles` |
+| 处理模式 | 更新数据 |
+
+### 19.2 设置数据范围
+
+点击“+ 添加”配置三条 AND 条件：
+
+| 表字段 | 选择条件 | 比较类型 | 比较值 |
+|---|---|---|---|
+| `id` | 等于 | 引用 | N03 / record_id |
+| `uid` | 等于 | 引用 | N00 / uid |
+| `confirmation_token` | 等于 | 引用 | N03 / stored_confirmation_token |
+
+### 19.3 设置更新数据
+
+| 参数名 | 类型 | 值 |
+|---|---|---|
+| `profile_json` | 引用 | N03 / pending_profile_json |
+| `pending_profile_json` | 固定值/常量 | `{}` |
+| `confirmation_token` | 固定值/常量 | 空字符串 |
+| `pending_status` | 固定值/常量 | `confirmed` |
+| `record_version` | 引用 | N17 / next_record_version |
+| `updated_at` | 引用 | N17 / confirmed_at |
+
+平台固定输出 `isSuccess`、`message`、`outputList`。
 
 N20 判断 `N19.isSuccess`：true → N21；false → N26。
 
