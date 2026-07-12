@@ -259,25 +259,27 @@ record_version Integer
 
 ## 9. N04 大模型：识别动作并生成/合并画像
 
-模型输入引用：
+### 9.1 输入区域
 
-```text
-N00.AGENT_USER_INPUT
-N00.confirmation_token
-N03.old_profile_json
-N03.pending_profile_json
-N03.pending_status
-```
+关闭“对话历史”。这个节点需要的旧画像和待确认画像已经由 N03 明确传入，开启历史会让模型混入更早的对话内容。
 
-提示词：
+不要保留 `input、input2、input3` 这类名称。输入参数必须改成：
+
+| 参数名 | 类型 | 参数值 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 引用 | N00 / AGENT_USER_INPUT |
+| `old_profile_json` | 引用 | N03 / old_profile_json |
+| `pending_profile_json` | 引用 | N03 / pending_profile_json |
+| `pending_status` | 引用 | N03 / pending_status |
+
+N04 不需要输入 `confirmation_token`。token 由 N17 代码节点校验，不应交给大模型决定是否合法。
+
+### 9.2 系统提示词
+
+把下面整段放入“系统提示词”：
 
 ```text
 你是“大学人生规划模拟器”的用户建档助手。
-
-用户本轮输入：{{AGENT_USER_INPUT}}
-已确认画像：{{old_profile_json}}
-待确认画像：{{pending_profile_json}}
-待确认状态：{{pending_status}}
 
 判断 requested_action：
 - 用户首次提供资料或要求重新生成：draft
@@ -295,7 +297,7 @@ N03.pending_status
 
 输出：
 {
-  "requested_action": "draft|modify|confirm|cancel",
+  "requested_action": "draft",
   "profile_json": {
     "nickname": "",
     "grade": "",
@@ -322,6 +324,32 @@ N03.pending_status
   },
   "reply": ""
 }
+```
+
+其中 `requested_action` 的示例值是 `draft`；实际只能填写 `draft`、`modify`、`confirm`、`cancel` 四者之一，不能原样输出 `draft|modify|confirm|cancel`。
+
+### 9.3 用户提示词
+
+把下面整段放入“用户提示词”：
+
+```text
+用户本轮输入：{{AGENT_USER_INPUT}}
+已确认画像：{{old_profile_json}}
+待确认画像：{{pending_profile_json}}
+待确认状态：{{pending_status}}
+
+请根据以上内容判断 requested_action，并按照系统提示词规定的 JSON 结构输出结果。
+```
+
+变量名必须和“输入”区域左侧参数名完全一致，包括大小写。不要在提示词里写 `{{input}}`、`{{input2}}`。
+
+### 9.4 输出区域
+
+```text
+输出格式：text
+变量名：output
+变量类型：String
+描述：大模型返回的用户动作与画像 JSON 文本
 ```
 
 N04 输出：`output`，连接 N05。
