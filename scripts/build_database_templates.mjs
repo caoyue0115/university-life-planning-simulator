@@ -12,7 +12,7 @@ const F = (name, type, description, defaultValue = null, required = false) => [
   type,
   description,
   defaultValue,
-  required,
+  required ? "是" : "否",
 ];
 
 const definitions = [
