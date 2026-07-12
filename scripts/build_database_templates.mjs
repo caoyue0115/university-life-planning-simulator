@@ -4,7 +4,7 @@ import { FileBlob, SpreadsheetFile } from "@oai/artifact-tool";
 
 const sourceTemplate = process.env.DB_TEMPLATE || "D:/DB_TABLE_导入模板.xlsx";
 const repoRoot = process.cwd();
-const outputDir = path.join(repoRoot, "docs", "database", "import-templates");
+const outputDir = process.env.DB_OUTPUT_DIR || path.join(repoRoot, ".tmp-artifact-templates");
 const previewDir = process.env.DB_PREVIEW_DIR || path.join(repoRoot, ".tmp-db-previews");
 
 const F = (name, type, description, defaultValue = null, required = false) => [

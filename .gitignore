@@ -1,1 +1,4 @@
 .worktrees/
+node_modules/
+.tmp-artifact-templates/
+.tmp-db-previews/
