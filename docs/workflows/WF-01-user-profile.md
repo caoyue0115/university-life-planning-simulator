@@ -356,21 +356,39 @@ N04 输出：`output`，连接 N05。
 
 ## 10. N05 变量提取器：提取模型 JSON
 
-输入选择：
+这个节点不是固定 JSON 解析器，而是使用模型根据“输出变量描述”从 N04 文本中提取字段。请按右侧页面从上到下配置。
+
+### 10.1 模型
 
 ```text
-N04 / output
+Spark4.0 Ultra
 ```
 
-提取变量：
+### 10.2 输入
 
-| 变量 | 类型 |
-|---|---|
-| `requested_action` | String |
-| `profile_json` | String；如果支持 Object 可用 Object |
-| `reply` | String |
+输入区域只保留一行：
 
-解析失败时，N05 的失败信息要传给 N06，不得进入数据库写入。
+| 参数名 | 参数类型 | 参数值 |
+|---|---|---|
+| `input` | 引用 | N04 / output |
+
+这里的 `input` 是变量提取器自己的输入参数名，可以保留；右侧参数值必须选择上游 `N04 / output`。如果下拉框显示“暂无数据”，先确认 N04 已经连线到 N05，并且 N04 的输出变量名是 `output`。
+
+### 10.3 输出
+
+把默认的 `output` 行改名为第一条变量，再点击“+ 添加”补齐另外两条。三行都必须填写描述，否则页面会显示“值不能为空”。
+
+| 变量名 | 变量类型 | 描述（原样填写） |
+|---|---|---|
+| `requested_action` | String | 从输入 JSON 中提取 requested_action。只能输出 draft、modify、confirm、cancel 之一，不要输出解释。 |
+| `profile_json` | String | 从输入 JSON 中提取完整 profile_json 对象，并序列化为合法 JSON 字符串；必须包含对象的全部字段，不要只提取 profile_card。 |
+| `reply` | String | 从输入 JSON 中提取 reply 字段；没有内容时输出空字符串。 |
+
+不要把 `profile_json` 设置成假定存在的 Object 类型；本教程统一设置为 String，下一节点 N06 再使用 `JSON.parse` 校验。
+
+### 10.4 异常处理
+
+初次搭建时保持关闭。N05 正常输出后连接 N06；如果提取失败或字段为空，N06 会令 `valid=false`，再由 N07 转到 N29，不进入数据库写入。
 
 ## 11. N06 代码和 N07 分支器：校验模型结果
 
