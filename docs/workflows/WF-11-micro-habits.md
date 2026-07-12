@@ -2,7 +2,7 @@
 
 ## 1. 目标与准备
 
-处理习惯、记账和入门健身三类请求，产出 `habit_log_json`。支持休息日和补签说明，不把中断描述成失败；不承诺系统级主动推送或可视化日历。准备输入 `AGENT_USER_INPUT`、`user_id`、`session_id`、可选 `context_json`、`confirm_action`、`confirmation_token`，存储实体 `habit_logs`；token 由主 Agent 或平台生成并传入，不让大模型自行编造。
+处理习惯、记账和入门健身三类请求，产出 `habit_log_json`。支持休息日和补签说明，不把中断描述成失败；不承诺系统级主动推送或可视化日历。准备输入 `AGENT_USER_INPUT`、`uid`、`session_id`、可选 `context_json`、`confirm_action`、`confirmation_token`，存储实体 `habit_logs`；token 由主 Agent 或平台生成并传入，不让大模型自行编造。
 
 ## 2. 最小可运行版
 
@@ -59,15 +59,15 @@ flowchart LR
 | 提取意图与风险 | `category`,`operation`,`risk_flags` | 同名变量 |
 | 是否触发安全出口 | `risk_flags` 非空走是 | 分支 |
 | 生活类别 | `category=habit/expense/fitness` | 分支 |
-| 读取状态 | 按 `user_id + habit_id` 或健身类型查询 | `existing_state_json` |
+| 读取状态 | 按 `uid + habit_id` 或健身类型查询 | `existing_state_json` |
 | 整理习惯记录 | 识别 `done/rest/skipped_with_reason/makeup` | `habit_event_json` |
 | 计算连续记录 | 代码 B；休息日不中断，补签保留说明 | `streak_result_json` |
 | 提取账目 | 金额、类别、说明、用户提供的日期 | `expense_json` |
 | 校验金额与类别 | 金额须大于 0 且为数字 | `validation_ok`,`error` |
 | 金额是否有效 | `validation_ok=false` 进入追问并结束，绝不连接写入 | 分支 |
 | 入门健身 | 仅低风险渐进建议或事实记录 | `fitness_json` |
-| 保存 pending draft | 首轮保存草稿、`user_id`、`confirmation_token` 和 `awaiting_confirmation` | `pending_draft` |
-| 读取 pending draft | 后续轮按 `user_id + confirmation_token` 读取 | `pending_draft` |
+| 保存 pending draft | 首轮保存草稿、`uid`、`confirmation_token` 和 `awaiting_confirmation` | `pending_draft` |
+| 读取 pending draft | 后续轮按 `uid + confirmation_token` 读取 | `pending_draft` |
 | token 与 confirm_action 是否匹配 | 必须动作、token、用户和草稿均匹配 | `confirmation_ok` |
 | 写入生活记录 | `record_key=habit_logs`，事件追加 | `write_result` |
 
@@ -114,7 +114,7 @@ return { active_days, rest_days: Number(existing_state_json?.streak?.rest_days |
 
 - 检出疼痛、疾病、极端节食或高风险动作后立即走安全出口：“先停止本工作流的常规建议；如症状明显、持续或紧急，请联系合格医疗专业人员/当地急救服务。”不继续生成动作方案，不写成已完成记录。
 - 休息日是计划的一部分；补签必须保留用户说明，不能伪造原日期或连续纪录。
-- 确认必须跨轮完成：首次保存 `pending draft` 并返回不可猜测的 `confirmation_token`；后续只有 `confirm_action=confirm_habit_log` 且 token、`user_id` 与草稿完全匹配才写正式记录。普通“好的”和首次同轮确认均不写入。缺 `user_id`、数据库失败或回读不一致时返回 `write_failed`。
+- 确认必须跨轮完成：首次保存 `pending draft` 并返回不可猜测的 `confirmation_token`；后续只有 `confirm_action=confirm_habit_log` 且 token、`uid` 与草稿完全匹配才写正式记录。普通“好的”和首次同轮确认均不写入。缺 `uid`、数据库失败或回读不一致时返回 `write_failed`。
 
 ## 7. 调试与验收清单
 
@@ -127,3 +127,32 @@ return { active_days, rest_days: Number(existing_state_json?.streak?.rest_days |
 - [ ] 四类风险均能进入专业求助安全出口。
 - [ ] 正式记录经确认；写入失败不声称成功。
 - [ ] 周汇总只使用已保存记录，结果可交给 WF-12。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+创建 `habit_logs`，上传 [DB-10-habit-logs.xlsx](../database/import-templates/DB-10-habit-logs.xlsx)。
+
+| 输入 | 来源 | 示例 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 开始节点 | `今天散步20分钟`、`午饭花了25元`、`确认记录这笔支出` |
+| `uid` | 主 Agent | `test_user_001` |
+| `log_type` | 意图提取 | `habit/expense/fitness/safety` |
+| `confirmation_token` | 需确认记录的首轮输出 | 下一轮使用 |
+
+查询近期记录：
+
+```sql
+SELECT * FROM habit_logs
+WHERE uid='{{uid}}' AND log_type='{{log_type}}'
+ORDER BY log_date DESC, create_time DESC;
+```
+
+习惯和普通健身记录校验后可以按产品确认规则新增；金额记录必须先校验 `amount>0`，再保存 pending/token，确认轮才正式写入。平台没有 Decimal 时 `amount` 保存为 String，但代码节点必须先把它解析成有效数字。
+
+写字段：`log_id,log_type,habit_name,log_date,amount,category,duration_minutes,completed,note,safety_flag,log_json,updated_at`。疼痛、疾病、极端节食和高风险动作进入安全消息，不写普通完成记录。
+
+节点映射：用户输入 → 意图/安全提取 → 查询近期记录 → 大模型/代码校验 → pending 或正式写入 → `isSuccess` 决策 → `result_json` → 结束。周汇总只读取数据库成功返回的记录。
+
+调试散步、支出金额为负、支出有效但未确认、有效确认、疼痛描述、数据库失败六种情况；检查非法金额和安全出口都没有新增正式记录。

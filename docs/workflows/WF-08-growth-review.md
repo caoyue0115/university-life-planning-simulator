@@ -6,7 +6,7 @@
 
 ## 2. 搭建前准备
 
-输入：`AGENT_USER_INPUT`,`user_id`,`session_id`,`main_plan_json`，可选 `semester_tasks_json`,`action_records_json`,`new_evidence_json`,`trigger_reason`,`confirm_action`,`confirmation_token`。准备只读的主规划、任务、行动记录，以及可存 pending 和正式记录的“成长复盘”实体。任何技能点亮必须绑定证据。具体数据库字段以当前编辑器显示为准；降级为长期记忆检索/写入时，使用 `user_id + growth_review + 时间` 保存复盘，不覆盖 `main_plan`。
+输入：`AGENT_USER_INPUT`,`uid`,`session_id`,`main_plan_json`，可选 `semester_tasks_json`,`action_records_json`,`new_evidence_json`,`trigger_reason`,`confirm_action`,`confirmation_token`。准备只读的主规划、任务、行动记录，以及可存 pending 和正式记录的“成长复盘”实体。任何技能点亮必须绑定证据。具体数据库字段以当前编辑器显示为准；降级为长期记忆检索/写入时，使用 `uid + growth_review + 时间` 保存复盘，不覆盖 `main_plan`。
 
 ## 3. 最小可运行版
 
@@ -51,21 +51,21 @@ flowchart LR
  └─ 确认草稿 → 代码（校验 token 与 confirm_action）→ 数据库（写入复盘状态，final 模式）→ 写入类型与结果 → 成功/失败消息 → 结束
 ```
 
-拖入 4 个“数据库”（合并读取主规划与 pending、读取近期任务、读取行动证据、写入复盘状态）、3 个“代码”（识别证据、校验建议、校验 token）、2 个“分支器”、2 个“决策”（建议类型、写入类型与结果）、1 个“大模型”、2 个“变量提取器”、9 个“消息”和 1 个共享“结束”，按图连接。“写入复盘状态”按输入 `write_mode=pending/final` 复用：pending 保存草稿和 token，final 写正式复盘。第一个数据库节点按 `user_id` 查询主规划，并按 token 可选查询 pending；不支持一次返回两类记录时改用“长期记忆检索”读取 pending，仍保持 4 个数据库。
+拖入 4 个“数据库”（合并读取主规划与 pending、读取近期任务、读取行动证据、写入复盘状态）、3 个“代码”（识别证据、校验建议、校验 token）、2 个“分支器”、2 个“决策”（建议类型、写入类型与结果）、1 个“大模型”、2 个“变量提取器”、9 个“消息”和 1 个共享“结束”，按图连接。“写入复盘状态”按输入 `write_mode=pending/final` 复用：pending 保存草稿和 token，final 写正式复盘。第一个数据库节点按 `uid` 查询主规划，并按 token 可选查询 pending；不支持一次返回两类记录时改用“长期记忆检索”读取 pending，仍保持 4 个数据库。
 
 ## 5. 节点配置与变量映射
 
 | 节点 | 查询/输入 | 输出 |
 |---|---|---|
-| 读取近期任务 | `user_id` + `plan_id` + 最近周期 | `semester_tasks_json` |
-| 读取行动证据 | `user_id` + 最近周期 | `action_records_json` |
+| 读取近期任务 | `uid` + `plan_id` + 最近周期 | `semester_tasks_json` |
+| 读取行动证据 | `uid` + 最近周期 | `action_records_json` |
 | 识别触发与证据质量 | 用户输入及三份数据 | `trigger_reason,facts,evidence,assumptions,info_sufficient` |
 | 生成成长复盘 | 上述结构化值 | JSON 文本 |
 | 提取复盘结构 | 模型文本 | `growth_review_json` |
 | 校验建议 | 复盘 JSON | `review_valid,review_error,recommendation_type,next_workflow` |
 | 建议类型 | `recommendation_type` | `continue` / `fine_tune` / `consider_switch` |
 | 写入复盘状态 | `write_mode`,`growth_review_json`,`confirmation_token` | pending 模式保存草稿；final 模式只写成长复盘记录；输出 `review_write_ok` |
-| 读取主规划与 pending_review | `user_id`，可选 `confirmation_token` | `main_plan_json`,`pending_review_json`；pending 含过期时间 |
+| 读取主规划与 pending_review | `uid`，可选 `confirmation_token` | `main_plan_json`,`pending_review_json`；pending 含过期时间 |
 | 校验 token 与确认动作 | 本轮 `confirm_action`、token、pending | 三者匹配且未过期才 `confirmation_valid=true` |
 
 事实、推断和证据必须分开：`facts` 只放用户明确陈述或数据库事实；`evidence` 记录证据类型与位置；模型解释放 `assumptions` 并标“待验证”。校验必须拒绝 `consider_switch` 缺少 `impact_on_main_plan,opportunity_cost,alternatives,confirmation_required` 的结果。
@@ -91,7 +91,7 @@ assumptions={{assumptions}}
 
 ## 7. 确认、写入和失败处理
 
-生成复盘无需确认；要保存时，第一次调用只保存 `pending_review_json + confirmation_token` 并结束，返回 `awaiting_confirmation`。下一次调用读取 pending，只有 token、`user_id`、未过期状态一致且 `confirm_action=confirm` 才写复盘；cancel 删除/失效 pending，modify 生成新 token。微调只交 WF-07，建议切换只交 WF-06，并明确主规划未改变。写入失败返回 `write_failed` 和复盘草案，不得称已保存。
+生成复盘无需确认；要保存时，第一次调用只保存 `pending_review_json + confirmation_token` 并结束，返回 `awaiting_confirmation`。下一次调用读取 pending，只有 token、`uid`、未过期状态一致且 `confirm_action=confirm` 才写复盘；cancel 删除/失效 pending，modify 生成新 token。微调只交 WF-07，建议切换只交 WF-06，并明确主规划未改变。写入失败返回 `write_failed` 和复盘草案，不得称已保存。
 
 ## 8. 调试用例
 
@@ -112,3 +112,27 @@ assumptions={{assumptions}}
 - [ ] 技能与成就绑定证据，无惩罚性表达。
 - [ ] 任何覆盖动作都返回 WF-06 再次确认，历史版本由 WF-06 保留。
 - [ ] 写入失败不得声称成功；输出 `growth_review_json` 可供主 Agent 和 WF-12 使用。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+### 准备和输入
+
+WF-08 读取 `main_plans`、`semester_tasks`、`resume_entries`、`habit_logs`，写 `growth_reviews`。请上传 [DB-05](../database/import-templates/DB-05-main-plans.xlsx)、[DB-06](../database/import-templates/DB-06-semester-tasks.xlsx)、[DB-07](../database/import-templates/DB-07-growth-reviews.xlsx)、[DB-08](../database/import-templates/DB-08-resume-entries.xlsx)、[DB-10](../database/import-templates/DB-10-habit-logs.xlsx)。
+
+开始输入：`AGENT_USER_INPUT`（例如“最近两周任务都没完成，帮我复盘”）、`uid=test_user_001`、可选 `plan_id`。
+
+四个读取节点都必须带 `uid`。主规划取 active 1 条；任务取近期记录；履历和习惯允许空数组。任何 `isSuccess=false` 停止；非核心证据表为空只表示没有相关证据。
+
+保存复盘到 `growth_reviews`，字段为 `review_id,plan_id,review_json,recommendation_type,pending_change_json,confirmation_token,evidence_summary_json,updated_at`。如果建议覆盖主规划，只保存 pending change 并返回 WF-06，不能直接更新 DB-05。
+
+| 节点 | 输入 | 输出 |
+|---|---|---|
+| 多表读取 | `uid,plan_id` | 各自 `outputList` |
+| 证据汇总 | 任务/履历/习惯记录 | `evidence_summary_json` |
+| 复盘大模型 | 主规划、证据、用户输入 | `growth_review_json` |
+| 保存复盘 | uid、review_id、校验 JSON | `isSuccess` |
+| 结束 | `result_json` | `output` |
+
+调试正常证据、全部可选证据为空、任务读取失败、建议切换四种情况；建议切换时确认 DB-07 有 pending change，而 DB-05 未被直接覆盖。

@@ -8,6 +8,11 @@
 - [讯飞星辰工作流搭建总指南](docs/workflows/README.md)
 - [工作流共享协议](docs/workflows/SHARED-CONTRACTS.md)
 - [可复用工作流模板](docs/workflows/WORKFLOW-TEMPLATE.md)
+- [数据库从零建表与导入教程](docs/database/README.md)
+- [11 张数据库字段字典](docs/database/DATABASE-SCHEMA.md)
+- [可复制 SQL 示例](docs/database/SQL-EXAMPLES.md)
+- [WF 数据库节点映射](docs/database/WF-DATABASE-MATRIX.md)
+- [11 份字段导入模板](docs/database/import-templates/)
 
 ## 12 个工作流搭建指南
 

@@ -6,7 +6,7 @@
 
 ## 2. 搭建前准备
 
-- 输入：`AGENT_USER_INPUT`、`user_id`、`session_id`、`context_json`；其中 `context_json` 应含本会话已确认结果、写入结果和会话前状态摘要，而非无限完整对话。
+- 输入：`AGENT_USER_INPUT`、`uid`、`session_id`、`context_json`；其中 `context_json` 应含本会话已确认结果、写入结果和会话前状态摘要，而非无限完整对话。
 - 读取实体：必要的 `user_profile`、`main_plan`、`semester_tasks`；写入实体：`session_recaps`，必要时仅更新对应实体的变化字段。
 - 所有数据库操作以当前编辑器显示为准；不支持局部更新时，复盘只写入 `session_recaps`，由后续工作流按建议变更再次确认。
 
@@ -46,13 +46,13 @@ flowchart LR
       └─ 是 → 消息（返回复盘与下次入口）→ 结束
 ```
 
-拖入 1 个“大模型”、1 个“变量提取器”、1 个“代码”、3 个“决策”、2 个“数据库”、4 个“消息”和各 1 个“开始/结束”，按图命名连接。若无稳定写入标志，再拖入一个“数据库”重命名为“回读会话复盘”，按 `user_id + session_id` 比较版本。
+拖入 1 个“大模型”、1 个“变量提取器”、1 个“代码”、3 个“决策”、2 个“数据库”、4 个“消息”和各 1 个“开始/结束”，按图命名连接。若无稳定写入标志，再拖入一个“数据库”重命名为“回读会话复盘”，按 `uid + session_id` 比较版本。
 
 ## 5. 实际节点配置与变量映射
 
 | 节点 | 配置 | 输出 |
 |---|---|---|
-| 读取会话前状态 | 按 `user_id` 读取必要摘要，禁止跨用户 | `before_state_json` |
+| 读取会话前状态 | 按 `uid` 读取必要摘要，禁止跨用户 | `before_state_json` |
 | 提取新增或变化 | 提示词 A，对比 before 与已确认结果 | `recap_text` |
 | 提取双层复盘 | 提取 `user_recap`,`agent_recap`,`state_changes`,`next_entry` | `session_recap_json` |
 | 校验变化与来源 | 代码 B，过滤闲聊、推断和未成功写入事项 | `validated_recap_json`,`has_changes`,`needs_confirmation` |
@@ -122,7 +122,7 @@ return { validated_recap_json: {...r, agent_recap: agent, state_changes: allowed
 
 - 会话复盘本身可作为压缩日志保存；若其中建议修改画像、主规划、重要履历或执行覆盖/删除，必须先让用户确认，或路由回对应工作流完成确认，WF-12 不越权更新。
 - 用户要求删除记录时返回 `next_action=confirm_delete`，不在复盘中暗中删除。
-- 缺 `user_id` 时仍可返回用户复盘，但不读取或写入长期状态。
+- 缺 `uid` 时仍可返回用户复盘，但不读取或写入长期状态。
 - 写入失败返回 `status=write_failed`、`next_action=retry_session_recap_write`；可展示复盘草稿，但明确“本次续接状态未保存成功”。
 
 ## 8. 调试与验收清单
@@ -136,4 +136,39 @@ return { validated_recap_json: {...r, agent_recap: agent, state_changes: allowed
 - [ ] 普通闲聊、未验证推断、写入失败不进入事实变化。
 - [ ] 关键变化经过用户确认；写入失败不声称成功。
 - [ ] `next_entry` 和 `recommended_opening` 足以支持下一次会话继续。
-- [ ] 两个 `user_id` 回读互不可见。
+- [ ] 两个 `uid` 回读互不可见。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+创建 `session_recaps`，上传 [DB-11-session-recaps.xlsx](../database/import-templates/DB-11-session-recaps.xlsx)。
+
+| 输入 | 来源 | 示例 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 开始节点 | `先到这里，总结一下` |
+| `uid` | 主 Agent | `test_user_001` |
+| `session_id` | 主 Agent/会话上下文 | `SESSION-TEST-001` |
+| `workflow_result_json` | 刚完成的业务 WF | 统一结果包装 |
+
+读取最近复盘：
+
+```sql
+SELECT * FROM session_recaps
+WHERE uid='{{uid}}'
+ORDER BY create_time DESC LIMIT 1;
+```
+
+`outputList=[]` 表示首次复盘，可使用空历史继续。过滤代码只保留成功写入的新事实和状态变化；普通闲聊、Agent 推断、`write_failed` 项不得写入。
+
+保存节点选择 `session_recaps` 表单新增，字段为 `session_id,user_recap_json,agent_recap_json,new_facts_json,state_changes_json,open_questions_json,next_entry,recap_version,updated_at`。写入后按 `uid + session_id` 回读验证。
+
+| 节点 | 输入 | 输出 |
+|---|---|---|
+| 读取最近复盘 | uid | `isSuccess,message,outputList` |
+| 变化过滤 | 当前业务结果、最近复盘 | 允许保存的增量 |
+| 复盘大模型 | 过滤结果、未决事项 | 用户/Agent recap JSON |
+| 保存/回读 | uid、session_id、校验 JSON | `isSuccess,outputList` |
+| 结束 | `result_json` | `output` |
+
+调试正常结束、首次空历史、上游 `write_failed`、纯闲聊、数据库失败、下一次会话读取最近复盘。只有回读成功才能说“复盘已保存”。

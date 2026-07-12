@@ -93,7 +93,7 @@ flowchart LR
 
 ![WF-04 路径推荐分支图](images/WF-04-path-recommendation.png)
 
-逐边变量：A→B/C `user_id`；B/C→D `profile_json,adventure_result_json,read_result`；D是→F `grade,major,五路径名`；F→G `profile_json,adventure_result_json,knowledge_hits`；G→H `model_text`；H→I `route_recommendation_json`；I→J `valid,errors,value`；J否→K `value,errors`；K→L `repaired_text`；L→M `route_recommendation_json`；M→P `valid,errors,value`；J是/P是→N `user_id,value`；N→O `write_result`。
+逐边变量：A→B/C `uid`；B/C→D `profile_json,adventure_result_json,read_result`；D是→F `grade,major,五路径名`；F→G `profile_json,adventure_result_json,knowledge_hits`；G→H `model_text`；H→I `route_recommendation_json`；I→J `valid,errors,value`；J否→K `value,errors`；K→L `repaired_text`；L→M `route_recommendation_json`；M→P `valid,errors,value`；J是/P是→N `uid,value`；N→O `write_result`。
 
 修复完整提示词：
 
@@ -102,3 +102,37 @@ flowchart LR
 ```
 
 生成提示词中的免责声明也必须替换为上述 PRD 原文。二次校验通过才允许保存；失败固定返回 `validation_failed`，不保存。保存成功结束：`{"workflow_id":"WF-04","version":"1.0","status":"completed","reply":"已生成并保存可解释的五路径建议，最终决定由你作出。","data":{"route_recommendation_json":{{value}}},"suggested_writes":[],"next_action":"create_parallel_versions","error":null}`。写入失败：`status=write_failed,reply=推荐已生成但未保存成功,next_action=retry_save,error={"code":"write_failed","message":"推荐未保存成功","retryable":true}`；读取失败用 `read_failed`，两次校验失败用 `validation_failed`。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+需要 `user_profiles` 和 `route_assessments`，上传 [DB-01](../database/import-templates/DB-01-user-profiles.xlsx) 与 [DB-03](../database/import-templates/DB-03-route-assessments.xlsx)。
+
+| 开始输入 | 来源 | 调试值 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 开始节点 | `根据测试结果给我路径建议` |
+| `uid` | 主 Agent | `test_user_001` |
+| `assessment_id` | WF-03 结束输出 | DB-03 中测试记录的 ID |
+
+读取画像 SQL：
+
+```sql
+SELECT profile_json FROM user_profiles
+WHERE uid='{{uid}}' AND pending_status='confirmed'
+ORDER BY updated_at DESC LIMIT 1;
+```
+
+读取测试结果 SQL：
+
+```sql
+SELECT * FROM route_assessments
+WHERE uid='{{uid}}' AND assessment_id='{{assessment_id}}'
+ORDER BY assessment_version DESC LIMIT 1;
+```
+
+任一 `isSuccess=false` 都进入读取失败；成功空数组进入“缺少前置数据”。推荐生成并校验后，在 `route_assessments` 更新当前 `id` 的 `route_recommendation_json,knowledge_updated_at,updated_at`，再按 `uid + assessment_id` 回读。
+
+节点映射：两个查询的 `outputList` → 推荐大模型；大模型 `output` → 变量提取器/代码校验；校验后的 JSON → 数据库；数据库 `isSuccess` → 写入决策；最终 `result_json` → 结束 `output`。
+
+调试正常记录、错误 assessment_id 空查询、临时错误表名三种情况。只有回读 JSON 一致才能输出 `completed/write_succeeded`。

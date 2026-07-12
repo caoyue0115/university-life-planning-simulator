@@ -6,7 +6,7 @@
 
 ## 2. 准备与输入
 
-开始输入：`AGENT_USER_INPUT`,`user_id`,`session_id`,`profile_json`,`parallel_versions_json`,`selected_version_name`，可选 `existing_main_plan_json`。准备“主规划”和“规划历史”数据实体；具体表字段和数据库操作以当前编辑器显示为准。若数据库能力不满足，使用“长期记忆检索/长期记忆写入”，以 `user_id` 加 `main_plan`/`plan_history` 键区分。
+开始输入：`AGENT_USER_INPUT`,`uid`,`session_id`,`profile_json`,`parallel_versions_json`,`selected_version_name`，可选 `existing_main_plan_json`。准备“主规划”和“规划历史”数据实体；具体表字段和数据库操作以当前编辑器显示为准。若数据库能力不满足，使用“长期记忆检索/长期记忆写入”，以 `uid` 加 `main_plan`/`plan_history` 键区分。
 
 ## 3. 最小可运行版
 
@@ -67,17 +67,17 @@ flowchart LR
 
 | 节点 | 输入 | 输出/条件 |
 |---|---|---|
-| 读取现有主规划 | `user_id` | `existing_main_plan_json`；查询必须包含 `user_id` |
+| 读取现有主规划 | `uid` | `existing_main_plan_json`；查询必须包含 `uid` |
 | 提取确认动作与 token | `AGENT_USER_INPUT` | `confirm_action`（confirm/cancel/modify/none）、`confirmation_token` |
-| 读取 pending_plan | `user_id + confirmation_token` | `pending_plan_json`；token 不匹配不得读取他人草稿 |
+| 读取 pending_plan | `uid + confirmation_token` | `pending_plan_json`；token 不匹配不得读取他人草稿 |
 | 定位选中版本 | `parallel_versions_json`,`selected_version_name` | `selected_version`,`version_valid`,`change_type`（create/switch/replace） |
 | 生成四层规划草案 | 画像、选中版本、旧规划 | JSON 文本 |
 | 提取主规划 | JSON 文本 | `main_plan_json` |
 | 校验规划 | `main_plan_json` | `plan_valid`,`plan_error` |
 | 保存 pending_plan | 规划草稿、操作类型、旧 plan_id | 生成不可猜测的 `confirmation_token`、`pending_id`、过期时间，返回 `pending_write_ok` |
-| 校验 token 与确认动作 | pending 与本轮输入 | 仅 `confirm_action=confirm` 且 token、user_id、未过期一致时 `confirmation_valid=true` |
-| 写入历史版本 | 旧规划、切换原因、时间、`user_id` | `history_write_ok` |
-| 写入主规划 | 新规划、`user_id`,`session_id` | `plan_write_ok` |
+| 校验 token 与确认动作 | pending 与本轮输入 | 仅 `confirm_action=confirm` 且 token、uid、未过期一致时 `confirmation_valid=true` |
+| 写入历史版本 | 旧规划、切换原因、时间、`uid` | `history_write_ok` |
+| 写入主规划 | 新规划、`uid`,`session_id` | `plan_write_ok` |
 | 历史成功门控 | `history_write_ok`,`change_type` | 新建为“无需历史”；切换/覆盖必须 `history_write_ok=true` |
 | 主规划写入检查 | `plan_write_ok` 或回读 | 成功才删除 pending；失败写一致性异常并保留旧主规划 |
 
@@ -115,5 +115,48 @@ user_request={{AGENT_USER_INPUT}}
 
 - [ ] 四层规划均有成功标准，且包含资源、风险、替代方案和不做清单。
 - [ ] 保存、切换、覆盖前均明确确认；历史版本和切换原因可查询。
-- [ ] 数据读写按 `user_id` 隔离，失败不声称成功。
+- [ ] 数据读写按 `uid` 隔离，失败不声称成功。
 - [ ] 输出 `main_plan_json` 可交给 WF-07；修改建议可由 WF-08 返回本流程重新确认。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+### 准备和输入
+
+创建 `parallel_versions` 与 `main_plans`，上传 [DB-04](../database/import-templates/DB-04-parallel-versions.xlsx)、[DB-05](../database/import-templates/DB-05-main-plans.xlsx)。
+
+| 输入 | 来源 | 调试值 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 开始节点 | `保存就业版为主规划`；下一轮 `确认保存` |
+| `uid` | 主 Agent | `test_user_001` |
+| `comparison_id` | WF-05 | DB-04 中的比较 ID |
+| `confirmation_token` | 首轮结束输出 | 第二轮原样传回 |
+
+数据库顺序必须是：读取比较/当前规划 → 保存 pending → 下一轮读取 pending → 历史写入成功门控 → 正式主规划写入 → 回读验证。
+
+读取当前主规划：
+
+```sql
+SELECT * FROM main_plans
+WHERE uid='{{uid}}' AND plan_status='active'
+ORDER BY record_version DESC LIMIT 1;
+```
+
+读取 pending：
+
+```sql
+SELECT * FROM main_plans
+WHERE uid='{{uid}}' AND confirmation_token='{{confirmation_token}}'
+  AND plan_status='pending'
+ORDER BY updated_at DESC LIMIT 1;
+```
+
+| 数据库节点 | 表单/输入 | 输出判断 |
+|---|---|---|
+| 保存 pending | 新增 `uid,plan_id,pending_plan_json,confirmation_token,plan_status=pending` | `isSuccess=true` 后才展示确认 |
+| 写历史 | 更新旧记录 `plan_status=history,change_reason` | 失败时停止，不写新规划 |
+| 写主规划 | 新增/更新 `plan_json,plan_status=active,record_version` | 检查 `isSuccess` |
+| 回读 | `uid,plan_id,record_version` | JSON 和 active 状态一致 |
+
+结束节点选择统一 `result_json`。首轮应为 `awaiting_confirmation`，第二轮回读成功才是 `write_succeeded`。调试后在 DB-05 检查旧 active 已变 history，且只有一个新 active。

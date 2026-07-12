@@ -2,7 +2,7 @@
 
 ## 1. 目标与准备
 
-主 Agent 在用户开始场景测试或继续未完成测试时调用。输入 `user_id`、`AGENT_USER_INPUT`、可选 `profile_json`/`adventure_state`；输出 `data.adventure_result_json`，同时包含五条路径信号与八项竞争力信号，不直接给最终推荐。
+主 Agent 在用户开始场景测试或继续未完成测试时调用。输入 `uid`、`AGENT_USER_INPUT`、可选 `profile_json`/`adventure_state`；输出 `data.adventure_result_json`，同时包含五条路径信号与八项竞争力信号，不直接给最终推荐。
 
 ## 2. 最小可运行版
 
@@ -70,6 +70,39 @@ flowchart LR
 
 答案提取提示词：`仅判断用户输入是否回答 current_question；输出 {"answer_id":null,"custom_answer":null,"is_valid":false,"reason":""}。编号匹配或语义明确的自定义方案才有效，不得用新输入回答尚未展示的题。` 单题信号规则：五路径和八竞争力均输出 `-1/0/1` 的内部方向值及文字 evidence；禁止直接把单题信号当最终标签，矛盾答案并存并在最终结果中列为待验证假设。
 
-逐边变量：A→B `user_id`；B→C 全部测试状态；C是→D `AGENT_USER_INPUT,current_question`；E是→G `current_question,answer`；G→H `signal_json`；H→I `answer,evidence,route_delta,competency_delta,answers`；I→J `answers.length,configured_question_count`；C否/J否→K `question_index,answers,profile_json`；K→L `model_text`；L→M `current_question,question_index+1,answers,user_id`；J是→P `answers,signal_evidence`；P→Q `adventure_result_json,user_id`。
+逐边变量：A→B `uid`；B→C 全部测试状态；C是→D `AGENT_USER_INPUT,current_question`；E是→G `current_question,answer`；G→H `signal_json`；H→I `answer,evidence,route_delta,competency_delta,answers`；I→J `answers.length,configured_question_count`；C否/J否→K `question_index,answers,profile_json`；K→L `model_text`；L→M `current_question,question_index+1,answers,uid`；J是→P `answers,signal_evidence`；P→Q `adventure_result_json,uid`。
 
 结束 `result_json`：题目已保存为 `{"workflow_id":"WF-03","version":"1.0","status":"awaiting_user_input","reply":"{{question.reply}}","data":{"adventure_state":{"current_question":{{question}},"question_index":{{index}},"answers":{{answers}}}},"suggested_writes":[],"next_action":"answer_adventure_question","error":null}`；完成写入成功为 `{"workflow_id":"WF-03","version":"1.0","status":"completed","reply":"场景测试已完成。","data":{"adventure_result_json":{{result}}},"suggested_writes":[],"next_action":"recommend_routes","error":null}`；答案无效为 `validation_failed`；读写错误分别为 `read_failed/write_failed`。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+创建 `simulation_states` 和 `route_assessments`，上传 [DB-02](../database/import-templates/DB-02-simulation-states.xlsx) 与 [DB-03](../database/import-templates/DB-03-route-assessments.xlsx)。
+
+| 开始输入 | 来源 | 调试值 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 开始节点 | 首轮“开始测试”，下一轮输入选项 |
+| `uid` | 主 Agent | `test_user_001` |
+| `profile_json` | DB-01 | 已确认画像 |
+
+“读取测试状态”选择 `simulation_states`：
+
+```sql
+SELECT * FROM simulation_states
+WHERE uid='{{uid}}' AND workflow_id='WF-03'
+ORDER BY updated_at DESC LIMIT 1;
+```
+
+“保存当前题目/答案”用表单新增/更新 `state_id,workflow_id,state_type,state_json,pending_item_json,current_index,completed,updated_at`。“保存测试结果”选择 `route_assessments`，新增 `assessment_id,adventure_result_json,trigger_reason,assessment_version,updated_at`。
+
+| 节点 | 输入 | 输出 |
+|---|---|---|
+| 读取状态 | `uid` | `isSuccess,message,outputList` |
+| 答案提取 | `current_question,AGENT_USER_INPUT` | `answer_json` |
+| 状态写入 | 题目、答案、序号 | `isSuccess` |
+| 最终汇总 | 完整 answers | `adventure_result_json` |
+| 评估写入 | `uid,assessment_id,result` | `isSuccess` |
+| 结束 | `result_json` | `output` |
+
+调试时第一轮只展示并保存第一题；下一轮才处理答案。未完成题数不得写 DB-03；完成后检查同 uid 的 `assessment_id` 记录，并把该 ID 传给 WF-04。

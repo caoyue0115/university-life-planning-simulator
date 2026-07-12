@@ -18,7 +18,7 @@
 
 ## 4. 配置与映射
 
-`读取模拟状态` 用 `user_id + simulation_state`；先按 `pending_event` 是否存在进入“结算上一事件”或“生成下一事件”，无状态时依据年级初始化：大一最多 4 学年，大二最多 3，大三最多 2。`变量存储器` 保存 `current_year,event_index,resources,choices,opportunities_gained,opportunities_forgone,completed`，仅用于本次执行；跨会话仍写数据库/长期记忆。
+`读取模拟状态` 用 `uid + simulation_state`；先按 `pending_event` 是否存在进入“结算上一事件”或“生成下一事件”，无状态时依据年级初始化：大一最多 4 学年，大二最多 3，大三最多 2。`变量存储器` 保存 `current_year,event_index,resources,choices,opportunities_gained,opportunities_forgone,completed`，仅用于本次执行；跨会话仍写数据库/长期记忆。
 
 提取用户选择时输入 `AGENT_USER_INPUT + current_event.options`，只接受当前选项编号或明确同义表达。保存节点写 `simulation_state` 或 `simulation_result`，不得写 `user_profile/main_plan`。写入检查规则同共享协议；失败返回 `write_failed` 但仍可把当前草稿交给用户复制保存。
 
@@ -75,7 +75,7 @@ flowchart LR
 
 ![WF-02 虚拟大学分支图](images/WF-02-virtual-university.png)
 
-逐边变量：A→B `user_id`；B→C `simulation_state,pending_event`；C是→D `AGENT_USER_INPUT,pending_event`；D→E `selected_option,is_valid`；E是→G `simulation_state,pending_event,selected_option`；G→H `model_text`；H→I `new_state`（必须清空已结算的 `pending_event`）；I→J `current_year,event_index,choices,completed`；C否/J否→K `profile_json,simulation_state`；K→L `event,user_id`；L→M `write_result`；J是→O `simulation_state`；O→P `simulation_summary_json,user_id`；P→Q `write_result`。
+逐边变量：A→B `uid`；B→C `simulation_state,pending_event`；C是→D `AGENT_USER_INPUT,pending_event`；D→E `selected_option,is_valid`；E是→G `simulation_state,pending_event,selected_option`；G→H `model_text`；H→I `new_state`（必须清空已结算的 `pending_event`）；I→J `current_year,event_index,choices,completed`；C否/J否→K `profile_json,simulation_state`；K→L `event,uid`；L→M `write_result`；J是→O `simulation_state`；O→P `simulation_summary_json,uid`；P→Q `write_result`。
 
 总结完整提示词：
 
@@ -84,3 +84,36 @@ flowchart LR
 ```
 
 结束 `result_json`：事件保存成功为 `{"workflow_id":"WF-02","version":"1.0","status":"awaiting_user_input","reply":"{{event.reply}}","data":{"simulation_state":{{state}},"pending_event":{{event}}},"suggested_writes":[],"next_action":"answer_simulation_event","error":null}`；完成且结果写入成功为 `{"workflow_id":"WF-02","version":"1.0","status":"completed","reply":"试玩已完成，以下是情景推演总结。","data":{"simulation_summary_json":{{summary}}},"suggested_writes":[],"next_action":"start_adventure","error":null}`；回答无效为 `validation_failed`；任一读/写失败分别为 `read_failed/write_failed` 并填统一 `error`。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+创建 `simulation_states` 并上传 [DB-02](../database/import-templates/DB-02-simulation-states.xlsx)；同时确保 DB-01 已创建。
+
+| 开始输入 | 来源 | 调试值 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 开始节点 | 首轮“开始虚拟大学”；下一轮输入选择 |
+| `uid` | 主 Agent | `test_user_001` |
+| `profile_json` | `user_profiles` 查询 | 已确认画像 |
+
+数据库节点配置：
+
+| 节点 | 表/操作 | 输入 | 输出用途 |
+|---|---|---|---|
+| 读取画像 | `user_profiles` 查询 | `uid` | 模拟基线 |
+| 读取模拟状态 | `simulation_states` 自定义查询 | `uid` | pending 事件和状态 |
+| 保存待回答事件 | 表单新增/更新 | `uid,state_id,workflow_id=WF-02,state_json,pending_item_json,current_index,updated_at` | 结束本轮 |
+| 更新状态 | 表单更新 | `id,state_json,pending_item_json,current_index,completed,updated_at` | 保存结算 |
+
+读取状态 SQL：
+
+```sql
+SELECT * FROM simulation_states
+WHERE uid='{{uid}}' AND workflow_id='WF-02'
+ORDER BY updated_at DESC LIMIT 1;
+```
+
+输入输出链：`数据库.outputList → 状态判断 → 结算/事件大模型 → 校验 JSON → 数据库写入 → isSuccess 决策 → result_json → 结束.output`。空数组表示首次模拟；有 pending 时必须先用本轮 `AGENT_USER_INPUT` 结算上一事件。
+
+调试：首轮确认保存一个 pending 事件并返回 `awaiting_user_input`；第二轮确认 `current_index` 增加且旧事件已结算；完成时输出 `completed`。临时错误表名应走 `read_failed`，测试后恢复。

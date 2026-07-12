@@ -6,7 +6,7 @@
 
 ## 2. 搭建前准备
 
-- 开始输入：`AGENT_USER_INPUT`、`user_id`、`session_id`、可选 `context_json`、`confirm_action`、`confirmation_token`；token 由主 Agent 或平台生成，不由大模型编造。
+- 开始输入：`AGENT_USER_INPUT`、`uid`、`session_id`、可选 `context_json`、`confirm_action`、`confirmation_token`；token 由主 Agent 或平台生成，不由大模型编造。
 - 存储实体：`resume_entries`；至少含共享协议规定的审计字段，`data_json` 存本指南定义的条目。
 - 若需参考措辞，可准备简历范例知识库；知识库不可替代用户事实。
 - 数据库字段、成功标志和回读按钮均**以当前编辑器显示为准**。不支持数据库时改用“长期记忆写入/长期记忆检索”；无法确认用户隔离时只运行无写入版。
@@ -72,9 +72,9 @@ flowchart LR
 |---|---|---|---|
 | 开始 | 平台输入 | `AGENT_USER_INPUT` 必选，其余由主 Agent 传入 | 同名变量 |
 | 是否为确认轮 | `confirm_action`,`confirmation_token` | 两者均非空走确认轮 | 分支 |
-| 读取 pending_resume_draft | `user_id + confirmation_token` | 只回读该用户未过期、已校验的待确认草稿 | `pending_resume_draft` |
+| 读取 pending_resume_draft | `uid + confirmation_token` | 只回读该用户未过期、已校验的待确认草稿 | `pending_resume_draft` |
 | token 与 confirm_action 是否匹配 | pending、用户、token 均匹配且动作是 `confirm_resume_entry` | `confirmation_ok` |
-| 读取同类履历 | `user_id` | 按 `user_id` 查询 `resume_entries`，禁止跨用户 | `existing_entries_json` |
+| 读取同类履历 | `uid` | 按 `uid` 查询 `resume_entries`，禁止跨用户 | `existing_entries_json` |
 | 提取履历事实 | 用户输入、上下文 | 使用下方提示词 A | `facts_text` |
 | 是否为伪造请求 | `unsafe_request` | 为真时返回 `unsafe_request` 并结束 | 分支 |
 | 提取履历字段 | `facts_text` | 提取 JSON 字段 | `resume_entry_json` |
@@ -85,7 +85,7 @@ flowchart LR
 | 校验最终履历 | `final_resume_entry_json` | 运行代码 B，并检查 `bullet` 非空 | `validated_resume_entry_json`,`final_validation_ok` |
 | 最终草稿是否有效 | `final_validation_ok` | 为假进入解析失败且禁止写入 | 分支 |
 | 保存 pending_resume_draft | `validated_resume_entry_json` | 保存校验后草稿、用户、token、`awaiting_confirmation`；不写正式履历 | `pending_resume_draft` |
-| 写入履历 | `user_id`,`validated_resume_entry_json` | 只写校验后的 `resume_entry_json`，新条目追加而非覆盖 | `write_result` |
+| 写入履历 | `uid`,`validated_resume_entry_json` | 只写校验后的 `resume_entry_json`，新条目追加而非覆盖 | `write_result` |
 | 写入是否成功 | 写入返回 | 成功标志为真；无稳定标志则增加数据库回读比较版本 | `write_ok` |
 | 结束 | 各分支结果 | 输出统一 `result_json` | `result_json` |
 
@@ -135,7 +135,7 @@ return { validation_ok: missing_fields.length === 0, missing_fields, quality_sta
 
 - 确认必须跨轮：下一轮同时传 `confirm_action=confirm_resume_entry` 与首次返回的 `confirmation_token`；“好的/继续”、同轮确认、token 不匹配或 pending 过期均不得写入。
 - 用户要求夸大、伪造经历或数字时，返回 `unsafe_request`，可帮助改写真实事实但不写假内容。
-- `user_id` 缺失时禁止写入。数据库报错、无成功标志或回读不一致，返回 `status=write_failed`、`next_action=retry_resume_write`，回复必须写“未保存成功”。
+- `uid` 缺失时禁止写入。数据库报错、无成功标志或回读不一致，返回 `status=write_failed`、`next_action=retry_resume_write`，回复必须写“未保存成功”。
 
 ## 9. 调试与验收清单
 
@@ -146,5 +146,43 @@ return { validation_ok: missing_fields.length === 0, missing_fields, quality_sta
 - [ ] 最小版输出 `draft`，完整版产出 `resume_entry_json`。
 - [ ] 八类事实均有字段，缺失值没有被编造。
 - [ ] 用户确认前无写入；写入失败返回 `write_failed`。
-- [ ] 两个 `user_id` 的履历互不可见。
+- [ ] 两个 `uid` 的履历互不可见。
 - [ ] 下游 WF-08 可从 `resume_entries` 读取行为证据，主 Agent 可把完成结果交给 WF-12。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+### 准备和输入
+
+创建 `resume_entries`，上传 [DB-08-resume-entries.xlsx](../database/import-templates/DB-08-resume-entries.xlsx)；需要任务证据时同时使用 DB-06。
+
+| 输入 | 来源 | 示例 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 开始节点 | `把我完成的校园网站项目写成简历条目`；确认轮 `确认保存这条履历` |
+| `uid` | 主 Agent | `test_user_001` |
+| `entry_type` | 变量提取器 | `项目` |
+| `confirmation_token` | 首轮结束输出 | 确认轮原样传回 |
+
+查询同类履历：
+
+```sql
+SELECT * FROM resume_entries
+WHERE uid='{{uid}}' AND entry_type='{{entry_type}}'
+ORDER BY updated_at DESC;
+```
+
+首轮生成和二次校验成功后，只在 `resume_entries` 新增 `pending_entry_json,confirmation_token,record_status=pending`；不得写 `resume_entry_json`。确认轮用 `uid + confirmation_token` 查询 pending：
+
+```sql
+SELECT * FROM resume_entries
+WHERE uid='{{uid}}' AND confirmation_token='{{confirmation_token}}'
+  AND record_status='pending'
+ORDER BY updated_at DESC LIMIT 1;
+```
+
+确认有效后按系统 `id` 更新 `resume_entry_json,quality_status,evidence_location,record_status=confirmed,updated_at`，检查数据库输出 `isSuccess`；成功后再按 `uid + entry_id` 回读。`isSuccess=false` 时使用 `message` 返回 `write_failed`，不得声称履历已保存。
+
+节点链：开始输入 → 是否确认轮 → 查询 pending/查询同类 → 大模型 → 提取和两次校验 → 保存 pending → 结束；确认轮直接读取 pending → 正式写入 → 回读 → 结束。结束节点选择统一 `result_json`，不是数据库 `outputList`。
+
+调试：新建草稿、错误 token、有效确认、伪造请求安全出口和数据库失败。最后在 DB-08 筛选 `uid=test_user_001`，确认只有经确认记录的 `record_status=confirmed`。

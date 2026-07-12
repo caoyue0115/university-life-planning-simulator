@@ -6,7 +6,7 @@
 
 ## 2. 搭建前准备
 
-- 开始输入：`AGENT_USER_INPUT`、`user_id`、`session_id`、`profile_json`、`route_recommendation_json`，可选 `selected_routes`。
+- 开始输入：`AGENT_USER_INPUT`、`uid`、`session_id`、`profile_json`、`route_recommendation_json`，可选 `selected_routes`。
 - `selected_routes` 必须是 2～3 个互不重复的路径名；未提供时从用户输入和推荐结果提取。
 - 可选知识库：五路径要求、分年级规划、项目/竞赛/实习资料，资料含来源与更新时间。
 - 结束统一输出：`status`、`reply`、`data.parallel_versions_json`、`suggested_writes`、`next_action`、`error`。
@@ -124,3 +124,32 @@ WF-05 不写正式主规划，`suggested_writes` 只能建议把选中的 `versi
 - [ ] 版本字段和统一比较维度完整，含局限与官方复核提示。
 - [ ] 不写入、不覆盖主规划，不把模拟描述成预测。
 - [ ] 输出 `parallel_versions_json` 可由 WF-06 读取。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+### 准备和输入
+
+需要 `user_profiles`、`route_assessments`、`parallel_versions`，对应 [DB-01](../database/import-templates/DB-01-user-profiles.xlsx)、[DB-03](../database/import-templates/DB-03-route-assessments.xlsx)、[DB-04](../database/import-templates/DB-04-parallel-versions.xlsx)。
+
+| 输入 | 来源 | 调试值 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 开始节点 | `比较保研、考研和就业三个版本` |
+| `uid` | 主 Agent | `test_user_001` |
+| `profile_json` | DB-01 查询 | confirmed 画像 |
+| `route_recommendation_json` | DB-03 查询 | 最新推荐 |
+
+查询画像和推荐时分别选择对应表，参数都添加 `uid`；推荐查询按 `updated_at` 降序取 1 条。任一空数组都提示先完成 WF-01/WF-04。
+
+保存比较结果：在“汇总并校验比较”之后拖入数据库，选择 `parallel_versions`，用表单新增 `comparison_id,versions_json,comparison_json,shared_baseline_json,selected_version_name,comparison_version,updated_at`。该流程只保存模拟版本，不写 `main_plans`。
+
+| 节点 | 输入 | 输出 |
+|---|---|---|
+| 两个读取节点 | `uid` | `isSuccess,message,outputList` |
+| 迭代/大模型 | 画像、推荐、选择路径 | 单个 `version_json` |
+| 汇总校验 | versions 数组 | `parallel_versions_json` |
+| 保存节点 | uid、comparison_id、校验结果 | `isSuccess` |
+| 结束 | `result_json` | `output` |
+
+调试时确认 3 个版本的 `shared_baseline_json` 完全一致，DB-04 增加一条记录；只输入一个路径应进入 `needs_input`，数据库失败应返回 `write_failed`。

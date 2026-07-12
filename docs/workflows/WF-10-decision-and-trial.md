@@ -2,7 +2,7 @@
 
 ## 1. 目标与准备
 
-对即时选择做机会成本分析，或创建、记录、复盘七天试错，产出 `decision_trial_json`。输入为 `AGENT_USER_INPUT`、`user_id`、`session_id`、可选 `context_json`、`confirm_action`、`confirmation_token`；存储实体为 `decision_trials`。token 由主 Agent 或平台生成，不由大模型编造。七天试错用于获得行为证据，不承诺七天完成大型成果。
+对即时选择做机会成本分析，或创建、记录、复盘七天试错，产出 `decision_trial_json`。输入为 `AGENT_USER_INPUT`、`uid`、`session_id`、可选 `context_json`、`confirm_action`、`confirmation_token`；存储实体为 `decision_trials`。token 由主 Agent 或平台生成，不由大模型编造。七天试错用于获得行为证据，不承诺七天完成大型成果。
 
 ## 2. 最小可运行版
 
@@ -73,9 +73,9 @@ flowchart LR
 | 提取意图与风险 | 提取 `mode`,`trial_id`,`day`,`high_risk`,`risk_reason` | 同名变量 |
 | 是否高风险 | `high_risk=true` 时进入专业求助安全出口 | 分支 |
 | 是否为 pending 确认轮 | 按 `confirm_action` 路由确认计划、确认复盘或新请求 | 分支 |
-| 读取 pending_trial_plan | `user_id + confirmation_token` | `pending_trial_plan` |
+| 读取 pending_trial_plan | `uid + confirmation_token` | `pending_trial_plan` |
 | 计划 token 与动作是否匹配 | 动作为 `confirm_trial_plan` 且用户/token/pending 匹配 | `confirmation_ok` |
-| 读取 pending_day7_review | `user_id + confirmation_token` | `pending_day7_review` |
+| 读取 pending_day7_review | `uid + confirmation_token` | `pending_day7_review` |
 | 复盘 token 与动作是否匹配 | 动作为 `confirm_day7_review` 且用户/token/pending 匹配 | `confirmation_ok` |
 | 选择模式 | `mode` 分为 `decision_analysis/create_trial/daily_log/day7_review` | 分支 |
 | 生成决策分析 | 提示词 B | `decision_analysis_json` |
@@ -83,7 +83,7 @@ flowchart LR
 | 提取/校验七天计划 | 检查假设、投入上限、最小行动和 7 日安排 | `plan_valid`,`validated_trial_plan_json` |
 | 保存 pending_trial_plan | 只保存 `validated_trial_plan_json`、用户、token 和 `awaiting_confirmation` | `pending_trial_plan` |
 | 保存 pending_day7_review | 只保存 `validated_review_json`、用户、token 和 `awaiting_confirmation` | `pending_day7_review` |
-| 读取试错状态 | `user_id + trial_id` | `trial_state_json` |
+| 读取试错状态 | `uid + trial_id` | `trial_state_json` |
 | 整理每日记录 | 提取精力、兴趣、完成度、困难、说明 | `daily_log_json` |
 | 提取/校验每日记录 | 检查 `trial_id`、日期 1～7 和量表范围 | `log_valid`,`validated_daily_log_json` |
 | 生成/提取/校验第七天复盘 | 检查证据、理由和决定枚举 | `review_valid`,`validated_review_json` |
@@ -146,10 +146,44 @@ flowchart LR
 
 成功用例：“我在考研和就业间犹豫，想先用七天体验数据分析，每天最多 30 分钟。”预期进入 `create_trial`，计划含假设、投入上限、每日最小行动；未确认不写入。第七天仅有 3 条记录时应标记证据不足。
 
-失败用例：缺 `user_id` 后要求保存，预期只返回草稿；模拟写入失败，预期回复明确“未保存”。
+失败用例：缺 `uid` 后要求保存，预期只返回草稿；模拟写入失败，预期回复明确“未保存”。
 
 - [ ] 四种模式路由正确，产出 `decision_trial_json`。
 - [ ] 即时分析包含八个决策维度，不替用户拍板。
 - [ ] 试错包含假设、投入上限、最小行动、每日指标和退出条件。
 - [ ] 创建与最终结论经过确认，失败不报成功。
 - [ ] 完成试错可把行为证据交给 WF-08，结果交给 WF-12。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+创建 `decision_trials` 并上传 [DB-09-decision-trials.xlsx](../database/import-templates/DB-09-decision-trials.xlsx)。
+
+| 输入 | 来源 | 示例 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 开始节点 | `我在纠结考研还是就业`、`创建七天试错`、`记录第2天`、`确认试错计划` |
+| `uid` | 主 Agent | `test_user_001` |
+| `trial_id` | 创建结果/用户输入 | 例如 `TRIAL-001` |
+| `day_number` | 变量提取 | 1～7 |
+| `confirmation_token` | pending 结束输出 | 确认轮使用 |
+
+读取完整试错：
+
+```sql
+SELECT * FROM decision_trials
+WHERE uid='{{uid}}' AND trial_id='{{trial_id}}'
+ORDER BY day_number ASC, create_time ASC;
+```
+
+创建计划和第七天复盘都先保存到 `pending_json`，`record_type` 分别使用 `plan`、`day7_review`，并保存 token；下一轮按 `uid + trial_id + confirmation_token` 读取后才写 `trial_plan_json` 或 `review_json`。每日记录新增 `record_type=daily_log,day_number,daily_log_json`。
+
+| 节点 | 输入 | 输出 |
+|---|---|---|
+| 意图与风险提取 | 用户输入 | `mode,high_risk,trial_id,day_number` |
+| 数据库读取 | `uid,trial_id` | `isSuccess,message,outputList` |
+| 模型/校验 | 状态和用户输入 | 各类 validated JSON |
+| pending/正式写入 | uid、业务键、JSON | `isSuccess` |
+| 结束 | `result_json` | `output` |
+
+调试即时分析（可不写库）、创建 pending、错误 token、确认计划、记录第 2 天、第七天 pending/确认以及 high_risk 安全出口。写入失败不得输出“已创建/已保存”。

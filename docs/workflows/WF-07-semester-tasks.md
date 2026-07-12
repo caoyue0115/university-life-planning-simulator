@@ -6,7 +6,7 @@
 
 ## 2. 搭建前准备
 
-输入：`AGENT_USER_INPUT`,`user_id`,`session_id`,`main_plan_json`，可选 `task_id`,`action_evidence`。任务实体建议字段：`task_id,user_id,plan_id,semester,month,week,task,deadline,priority,status,expected_evidence,actual_evidence,delay_reason,updated_at`。数据库字段、查询和更新方式以当前编辑器显示为准；不支持更新时采用“新增事件记录 + 查询时汇总最新状态”，不得假装已原地更新。
+输入：`AGENT_USER_INPUT`,`uid`,`session_id`,`main_plan_json`，可选 `task_id`,`action_evidence`。任务实体建议字段：`task_id,uid,plan_id,semester,month,week,task,deadline,priority,status,expected_evidence,actual_evidence,delay_reason,updated_at`。数据库字段、查询和更新方式以当前编辑器显示为准；不支持更新时采用“新增事件记录 + 查询时汇总最新状态”，不得假装已原地更新。
 
 ## 3. 最小可运行版
 
@@ -56,13 +56,13 @@ flowchart LR
 
 | 意图 | 必需参数 | 数据库条件 | 允许写入 |
 |---|---|---|---|
-| create | `main_plan_json`、任务内容 | 新 `task_id` + `user_id` | 完整新任务，初始 `status=pending` |
-| query | 可选状态/时间范围 | 必须含 `user_id`，可加 `plan_id/status` | 无 |
-| update | `task_id`、变更内容 | `user_id + task_id` | `task,deadline,priority,expected_evidence` |
-| complete | `task_id`、完成说明 | `user_id + task_id` | `status=completed,actual_evidence,updated_at` |
-| postpone | `task_id`、新截止时间/原因 | `user_id + task_id` | `deadline,delay_reason,status,updated_at` |
+| create | `main_plan_json`、任务内容 | 新 `task_id` + `uid` | 完整新任务，初始 `status=pending` |
+| query | 可选状态/时间范围 | 必须含 `uid`，可加 `plan_id/status` | 无 |
+| update | `task_id`、变更内容 | `uid + task_id` | `task,deadline,priority,expected_evidence` |
+| complete | `task_id`、完成说明 | `uid + task_id` | `status=completed,actual_evidence,updated_at` |
+| postpone | `task_id`、新截止时间/原因 | `uid + task_id` | `deadline,delay_reason,status,updated_at` |
 
-跨轮节点映射：读取 pending 使用 `user_id + confirmation_token` 输出 `pending_change_json`；保存 pending 写入完整 `change_json`、token、过期时间和 `status=pending`；token 校验输出 `confirmation_valid`；回读验证输出最终 `semester_tasks_json`。
+跨轮节点映射：读取 pending 使用 `uid + confirmation_token` 输出 `pending_change_json`；保存 pending 写入完整 `change_json`、token、过期时间和 `status=pending`；token 校验输出 `confirmation_valid`；回读验证输出最终 `semester_tasks_json`。
 
 “提取任务意图与参数”输出 `intent,task_id,requested_changes,filters,confirmation_text,action_evidence,confirm_action,confirmation_token`。如果同一句包含多个操作，优先追问，不批量猜测。
 
@@ -110,12 +110,12 @@ request={{AGENT_USER_INPUT}}
 
 ## 7. 确认与失败处理
 
-查询是只读操作。创建、更新、完成、延期第一次调用只保存 `pending_change + confirmation_token`，展示旧值、新值和口令后结束。下一次调用读取 pending，只有 token、`user_id`、未过期状态一致且 `confirm_action=confirm` 才写任务；cancel 删除 pending，modify 生成新 token。无成功标识时回读 `user_id + task_id`。失败返回完整 `result_json` 和未保存的 `change_json`，不得把任务表示为已变更。
+查询是只读操作。创建、更新、完成、延期第一次调用只保存 `pending_change + confirmation_token`，展示旧值、新值和口令后结束。下一次调用读取 pending，只有 token、`uid`、未过期状态一致且 `confirm_action=confirm` 才写任务；cancel 删除 pending，modify 生成新 token。无成功标识时回读 `uid + task_id`。失败返回完整 `result_json` 和未保存的 `change_json`，不得把任务表示为已变更。
 
 ## 8. 调试用例
 
 - 创建：第一次输入“根据我的大二就业主规划生成本周 3 个任务”，预期 pending 和 token；第二次携带 token 确认后写入，均绑定 `plan_id`。
-- 查询：“查看本周未完成任务。”预期只读且仅返回当前 `user_id` 数据。
+- 查询：“查看本周未完成任务。”预期只读且仅返回当前 `uid` 数据。
 - 完成：第一次输入“完成 T-01，提交了 GitHub 仓库链接”，预期展示旧新值和 token；第二次携带 token 确认后状态完成。
 - 缺失：“把那个任务延期。”预期要求提供或选择 `task_id`，无写入。
 - 写入失败：模拟数据库失败，预期 `write_failed`，不称已延期/已完成。
@@ -124,9 +124,45 @@ request={{AGENT_USER_INPUT}}
 
 - 分支串线：逐一测试五个意图，确认一次只进入一个写分支。
 - 越权修改主规划：`needs_plan_change=true` 时返回 WF-06，不在任务表改目标路径。
-- 用户隔离遗漏：每个数据库查询、更新条件都包含 `user_id`。
+- 用户隔离遗漏：每个数据库查询、更新条件都包含 `uid`。
 
 - [ ] 五种意图均可达，查询不写入，其余写入前确认。
 - [ ] 任务与 `plan_id`、学期/月/周映射一致。
 - [ ] 完成状态绑定真实行动或明确标注暂无证据。
 - [ ] 写入失败不声称成功；输出可供 WF-08 读取近期任务和行动证据。
+
+## 数据库与输入输出配置教程
+
+本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+
+### 准备和输入
+
+创建 `main_plans` 和 `semester_tasks`，上传 [DB-05](../database/import-templates/DB-05-main-plans.xlsx)、[DB-06](../database/import-templates/DB-06-semester-tasks.xlsx)。
+
+| 输入 | 来源 | 示例 |
+|---|---|---|
+| `AGENT_USER_INPUT` | 开始节点 | `生成本周任务`、`完成任务 T001`、`延期任务 T002` |
+| `uid` | 主 Agent | `test_user_001` |
+| `plan_id` | 当前主规划 | active 规划 ID |
+| `task_id` | 用户输入/变量提取 | 更新、完成、延期时必填 |
+
+读取 active 主规划使用 WF-06 的 SQL。查询任务：
+
+```sql
+SELECT * FROM semester_tasks
+WHERE uid='{{uid}}' AND plan_id='{{plan_id}}'
+ORDER BY deadline ASC;
+```
+
+创建用表单新增；更新、完成、延期优先按数据库返回的系统 `id` 更新，拿不到 id 时条件必须同时包含 `uid + task_id`。写入字段详见 [DB-06 字典](../database/DATABASE-SCHEMA.md#db-06-semester_tasks学期任务与行动)。
+
+| 节点 | 输入 | 输出 |
+|---|---|---|
+| 意图提取 | `AGENT_USER_INPUT` | `intent,task_id,change_json` |
+| 查询任务 | `uid,plan_id/task_id` | `outputList` |
+| 保存 pending 变更 | `uid,task_id,change_json,confirmation_token` | `isSuccess` |
+| 正式写入 | 校验后的 new_values | `isSuccess,message` |
+| 回读 | `uid,task_id` | 最新任务 JSON |
+| 结束 | `result_json` | `output` |
+
+调试至少覆盖：创建一条任务；查询列表；确认后完成；延期时缺少原因；错误 task_id 空查询；数据库失败。完成后在 DB-06 筛选 uid，确认状态和证据字段正确。
