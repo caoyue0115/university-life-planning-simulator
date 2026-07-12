@@ -418,6 +418,30 @@ return {
 };
 ```
 
+N06 的“输出”区域必须显式添加以下三行，变量名需要与代码 `return` 中的键完全一致：
+
+| 变量名 | 变量类型 | 描述 |
+|---|---|---|
+| `valid` | Boolean | N05 的动作和画像 JSON 是否通过校验；通过为 true，失败为 false。 |
+| `error` | String | 校验失败原因；成功时为空字符串。 |
+| `profile_json_string` | String | 经过 JSON 解析并重新序列化的完整画像 JSON 字符串；失败时为空字符串。 |
+
+对应关系：
+
+```text
+代码 return.valid               → 输出 valid
+代码 return.error               → 输出 error
+代码 return.profile_json_string → 输出 profile_json_string
+```
+
+如果代码节点的输出区已有默认 `output`，请删除或改名，不要保留一个无人使用的 `output`。配置完成后，下游引用关系是：
+
+```text
+N07 引用 N06 / valid
+N09 引用 N06 / profile_json_string
+N29 可以引用 N06 / error 显示失败原因
+```
+
 N07 条件：
 
 ```text
