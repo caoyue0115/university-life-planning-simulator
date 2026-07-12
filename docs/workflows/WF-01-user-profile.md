@@ -245,17 +245,17 @@ return {
 };
 ```
 
-输出必须添加：
+输出区域必须添加：
 
-```text
-has_record Boolean
-record_id Integer
-old_profile_json String
-pending_profile_json String
-stored_confirmation_token String
-pending_status String
-record_version Integer
-```
+| 变量名 | 类型 | 描述 |
+|---|---|---|
+| `has_record` | Boolean | 是否读取到该用户的画像记录。 |
+| `record_id` | Integer | 已有记录的 id；新用户没有记录时为空。 |
+| `old_profile_json` | String | 已正式确认的画像 JSON 字符串。 |
+| `pending_profile_json` | String | 等待确认的画像 JSON 字符串。 |
+| `stored_confirmation_token` | String | 数据库中保存的确认 token。 |
+| `pending_status` | String | 当前草稿状态。 |
+| `record_version` | Integer | 当前正式画像版本号。 |
 
 ## 9. N04 大模型：识别动作并生成/合并画像
 
@@ -528,7 +528,25 @@ return {
 };
 ```
 
-输出：四个同名变量。
+N09 的“输出”区域必须显式添加以下四行，名称与代码 `return` 完全一致：
+
+| 变量名 | 变量类型 | 描述 |
+|---|---|---|
+| `pending_profile_json` | String | 准备写入数据库的待确认画像 JSON 字符串。 |
+| `new_confirmation_token` | String | 本次草稿生成的唯一确认 token，返回给用户并写入数据库。 |
+| `pending_status` | String | 待确认状态，固定为 awaiting_confirmation。 |
+| `updated_at` | String | 本次草稿更新时间，ISO 8601 字符串。 |
+
+对应关系和下游用途：
+
+```text
+return.pending_profile_json  → N11/N13 的 pending_profile_json
+return.new_confirmation_token → N11/N13 的 confirmation_token，也由 N15 返回给用户
+return.pending_status         → N11/N13 的 pending_status
+return.updated_at             → N11/N13 的 updated_at
+```
+
+如果输出区有默认 `output`，请删除或改名。
 
 ## 14. N10 分支器：已有画像记录？
 
@@ -649,7 +667,12 @@ return {
 };
 ```
 
-N17 输出：`confirmation_valid`（Boolean）和 `next_record_version`（Integer）。
+N17 输出区域：
+
+| 变量名 | 类型 | 描述 |
+|---|---|---|
+| `confirmation_valid` | Boolean | 待确认草稿与传入 token 是否通过校验。 |
+| `next_record_version` | Integer | 正式写入时使用的新版本号。 |
 
 N18：
 
@@ -733,6 +756,12 @@ return {
     && normalize(row.profile_json) === normalize(expected_profile_json)
 };
 ```
+
+N23 输出区域：
+
+| 变量名 | 类型 | 描述 |
+|---|---|---|
+| `readback_consistent` | Boolean | 数据库回读的正式画像是否与本次确认写入的画像一致。 |
 
 N24：true → N25；false → N26。
 
