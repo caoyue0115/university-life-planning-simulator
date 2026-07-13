@@ -85,4 +85,4 @@
 - [x] Render all Mermaid blocks and visually inspect each PNG.
 - [x] Run guide validator and `git diff --check`.
 - [x] State the verified 12-workflow integration contract without inventing unconfirmed “工作流” node UI fields.
-- [ ] Commit and push the verified result.
+- [x] Commit and push the verified result.
