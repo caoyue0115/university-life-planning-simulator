@@ -21,7 +21,7 @@ SMALL = ImageFont.truetype(str(FONT_PATH), 17)
 
 NODE_PATTERN = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\s*(\{[^}]+\}|\[[^]]+\]|\([^)]*\))")
 EDGE_PATTERN = re.compile(
-    r"(?=([A-Za-z][A-Za-z0-9_]*)\s*(?:-->(?:\|([^|]+)\|)?|--\s*([^\-]+?)\s*-->)\s*([A-Za-z][A-Za-z0-9_]*))"
+    r"(?=\b([A-Za-z][A-Za-z0-9_]*)\s*(?:-->(?:\|([^|]+)\|)?|--\s*([^\-]+?)\s*-->)\s*([A-Za-z][A-Za-z0-9_]*)\b)"
 )
 
 

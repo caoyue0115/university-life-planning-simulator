@@ -245,19 +245,19 @@ N01 / isSuccess
 
 代码：
 
-```javascript
-const rows = Array.isArray(outputList) ? outputList : [];
-const row = rows.length > 0 ? rows[0] : null;
-
-return {
-  has_record: !!row,
-  record_id: row ? row.id : null,
-  old_profile_json: row?.profile_json || "{}",
-  pending_profile_json: row?.pending_profile_json || "{}",
-  stored_confirmation_token: row?.confirmation_token || "",
-  pending_status: row?.pending_status || "none",
-  record_version: Number(row?.record_version || 0)
-};
+```python
+def main(outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if rows else None
+    return {
+        "has_record": bool(row),
+        "record_id": row.get("id") if row else None,
+        "old_profile_json": row.get("profile_json") or "{}" if row else "{}",
+        "pending_profile_json": row.get("pending_profile_json") or "{}" if row else "{}",
+        "stored_confirmation_token": row.get("confirmation_token") or "" if row else "",
+        "pending_status": row.get("pending_status") or "none" if row else "none",
+        "record_version": int(row.get("record_version") or 0) if row else 0,
+    }
 ```
 
 输出区域必须添加：
@@ -416,21 +416,27 @@ profile_json = N05.profile_json
 
 代码：
 
-```javascript
-const allowed = ["draft", "modify", "confirm", "cancel"];
-let profile = profile_json;
-try {
-  if (typeof profile === "string") profile = JSON.parse(profile);
-} catch (error) {
-  return { valid: false, error: "profile_json_invalid", profile_json_string: "" };
-}
+```python
+import json
 
-const valid = allowed.includes(requested_action) && profile && typeof profile === "object";
-return {
-  valid,
-  error: valid ? "" : "required_field_missing",
-  profile_json_string: valid ? JSON.stringify(profile) : ""
-};
+
+def main(requested_action, profile_json):
+    allowed = {"draft", "modify", "confirm", "cancel"}
+    try:
+        profile = json.loads(profile_json) if isinstance(profile_json, str) else profile_json
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {
+            "valid": False,
+            "error": "profile_json_invalid",
+            "profile_json_string": "",
+        }
+
+    valid = requested_action in allowed and isinstance(profile, dict)
+    return {
+        "valid": valid,
+        "error": "" if valid else "required_field_missing",
+        "profile_json_string": json.dumps(profile, ensure_ascii=False) if valid else "",
+    }
 ```
 
 N06 的“输出”区域必须显式添加以下三行，变量名需要与代码 `return` 中的键完全一致：
@@ -533,14 +539,18 @@ profile_json_string = N06.profile_json_string
 
 代码：
 
-```javascript
-const token = `profile_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-return {
-  pending_profile_json: profile_json_string,
-  new_confirmation_token: token,
-  pending_status: "awaiting_confirmation",
-  updated_at: new Date().toISOString()
-};
+```python
+from datetime import datetime, timezone
+from uuid import uuid4
+
+
+def main(profile_json_string):
+    return {
+        "pending_profile_json": profile_json_string,
+        "new_confirmation_token": f"profile_{uuid4().hex}",
+        "pending_status": "awaiting_confirmation",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
 ```
 
 N09 的“输出”区域必须显式添加以下四行，名称与代码 `return` 完全一致：
@@ -685,19 +695,31 @@ record_version = N03.record_version
 
 代码：
 
-```javascript
-const valid = Boolean(has_record)
-  && pending_status === "awaiting_confirmation"
-  && Boolean(incoming_token)
-  && incoming_token === stored_token
-  && pending_profile_json
-  && pending_profile_json !== "{}";
+```python
+from datetime import datetime, timezone
 
-return {
-  confirmation_valid: valid,
-  next_record_version: Number(record_version || 0) + 1,
-  confirmed_at: new Date().toISOString()
-};
+
+def main(
+    incoming_token,
+    stored_token,
+    pending_status,
+    pending_profile_json,
+    has_record,
+    record_version,
+):
+    valid = (
+        bool(has_record)
+        and pending_status == "awaiting_confirmation"
+        and bool(incoming_token)
+        and incoming_token == stored_token
+        and bool(pending_profile_json)
+        and pending_profile_json != "{}"
+    )
+    return {
+        "confirmation_valid": valid,
+        "next_record_version": int(record_version or 0) + 1,
+        "confirmed_at": datetime.now(timezone.utc).isoformat(),
+    }
 ```
 
 N17 输出区域：
@@ -783,17 +805,25 @@ outputList = N21.outputList
 
 代码：
 
-```javascript
-const row = Array.isArray(outputList) && outputList.length ? outputList[0] : null;
-const normalize = value => {
-  try { return JSON.stringify(typeof value === "string" ? JSON.parse(value) : value); }
-  catch { return ""; }
-};
-return {
-  readback_consistent: Boolean(row)
-    && row.pending_status === "confirmed"
-    && normalize(row.profile_json) === normalize(expected_profile_json)
-};
+```python
+import json
+
+
+def main(expected_profile_json, outputList):
+    row = outputList[0] if isinstance(outputList, list) and outputList else None
+
+    def normalize(value):
+        try:
+            parsed = json.loads(value) if isinstance(value, str) else value
+            return json.dumps(parsed, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ""
+
+    return {
+        "readback_consistent": bool(row)
+        and row.get("pending_status") == "confirmed"
+        and normalize(row.get("profile_json")) == normalize(expected_profile_json)
+    }
 ```
 
 N23 输出区域：

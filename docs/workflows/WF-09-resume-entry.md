@@ -9,7 +9,7 @@
 - 开始输入：`AGENT_USER_INPUT`、`uid`、`session_id`、可选 `context_json`、`confirm_action`、`confirmation_token`；token 由主 Agent 或平台生成，不由大模型编造。
 - 存储实体：`resume_entries`；至少含共享协议规定的审计字段，`data_json` 存本指南定义的条目。
 - 若需参考措辞，可准备简历范例知识库；知识库不可替代用户事实。
-- 数据库字段、成功标志和回读按钮均**以当前编辑器显示为准**。不支持数据库时改用“长期记忆写入/长期记忆检索”；无法确认用户隔离时只运行无写入版。
+- 数据库字段、成功标志和回读按钮均按本文件逐栏配置。不支持数据库时改用“长期记忆写入/长期记忆检索”；无法确认用户隔离时只运行无写入版。
 
 ## 3. 最小可运行版
 
@@ -25,46 +25,46 @@
 
 ```mermaid
 flowchart LR
-  S[开始] --> CM{决策：是否为确认轮}
-  CM -- 是 --> PR[数据库：读取 pending_resume_draft] --> TC{决策：token 与 confirm_action 是否匹配}
-  TC -- 否 --> CI[消息：确认无效或草稿过期] --> Z[结束]
-  TC -- 是 --> W[数据库：写入履历]
-  CM -- 否 --> R[数据库：读取同类履历]
-  R --> E[大模型：提取履历事实]
-  E --> X[变量提取器：提取履历字段]
-  X --> U{决策：是否为伪造请求}
-  U -- 是 --> US[消息：拒绝伪造并帮助真实改写] --> Z
-  U -- 否 --> V[代码：校验履历字段]
-  V --> D{决策：字段是否可生成}
-  D -- 否 --> Q[消息：追问缺失信息] --> Z[结束]
-  D -- 是 --> G[大模型：生成履历草稿]
-  G --> GX[变量提取器：提取最终履历] --> GV[代码：校验最终履历] --> GD{决策：最终草稿是否有效}
-  GD -- 否 --> GF[消息：草稿解析失败] --> Z
-  GD -- 是 --> PW[数据库：保存 pending_resume_draft] --> P[消息：展示草稿与 confirmation_token] --> Z
-  W --> K{决策：写入是否成功}
-  K -- 否 --> F[消息：写入失败] --> Z
-  K -- 是 --> O[消息：保存成功] --> Z
+  S[N00 开始] --> CM{N01 分支器：是否为确认轮}
+  CM -- 是 --> PR[N02 数据库：读取 pending_resume_draft] --> TC{N03 分支器：token 与 confirm_action 是否匹配}
+  TC -- 否 --> CI[N04 消息：确认无效或草稿过期] --> Z[N05 结束]
+  TC -- 是 --> W[N06 数据库：写入履历]
+  CM -- 否 --> R[N07 数据库：读取同类履历]
+  R --> E[N08 大模型：提取履历事实]
+  E --> X[N09 变量提取器：提取履历字段]
+  X --> U{N10 分支器：是否为伪造请求}
+  U -- 是 --> US[N11 消息：拒绝伪造并帮助真实改写] --> Z
+  U -- 否 --> V[N12 代码：校验履历字段]
+  V --> D{N13 分支器：字段是否可生成}
+  D -- 否 --> Q[N14 消息：追问缺失信息] --> Z[N05 结束]
+  D -- 是 --> G[N15 大模型：生成履历草稿]
+  G --> GX[N16 变量提取器：提取最终履历] --> GV[N17 代码：校验最终履历] --> GD{N18 分支器：最终草稿是否有效}
+  GD -- 否 --> GF[N19 消息：草稿解析失败] --> Z
+  GD -- 是 --> PW[N20 数据库：保存 pending_resume_draft] --> P[N21 消息：展示草稿与 confirmation_token] --> Z
+  W --> K{N22 分支器：写入是否成功}
+  K -- 否 --> F[N23 消息：写入失败] --> Z
+  K -- 是 --> O[N24 消息：保存成功] --> Z
 ```
 
 ```text
-开始 → 决策（是否为确认轮）
-├─ 是 → 数据库（读取 pending_resume_draft）→ 决策（token 与 confirm_action 是否匹配）
+开始 → 分支器（是否为确认轮）
+├─ 是 → 数据库（读取 pending_resume_draft）→ 分支器（token 与 confirm_action 是否匹配）
 │  ├─ 否 → 消息（确认无效或草稿已过期）→ 结束
-│  └─ 是 → 数据库（写入履历）→ 决策（写入是否成功）→ 消息 → 结束
-└─ 否 → 数据库（读取同类履历）→ 大模型（提取履历事实）→ 变量提取器（提取履历字段）→ 决策（是否为伪造请求）
+│  └─ 是 → 数据库（写入履历）→ 分支器（写入是否成功）→ 消息 → 结束
+└─ 否 → 数据库（读取同类履历）→ 大模型（提取履历事实）→ 变量提取器（提取履历字段）→ 分支器（是否为伪造请求）
 ├─ 是 → 消息（拒绝伪造并帮助真实改写）→ 结束
-└─ 否 → 代码（校验履历字段）→ 决策（字段是否可生成）
+└─ 否 → 代码（校验履历字段）→ 分支器（字段是否可生成）
 ├─ 否 → 消息（追问缺失信息）→ 结束
-└─ 是 → 大模型（生成履历草稿）→ 变量提取器（提取最终履历）→ 代码（校验最终履历）→ 决策（最终草稿是否有效）
+└─ 是 → 大模型（生成履历草稿）→ 变量提取器（提取最终履历）→ 代码（校验最终履历）→ 分支器（最终草稿是否有效）
    ├─ 否 → 消息（草稿解析失败）→ 结束
    └─ 是 → 数据库（保存 pending_resume_draft）→ 消息（展示草稿与 confirmation_token）→ 结束
 ```
 
 ## 5. 节点清单与逐步拖拽连线
 
-拖入 4 个“数据库”、2 个“大模型”、2 个“变量提取器”、2 个“代码”、6 个“决策”、7 个“消息”和各 1 个“开始/结束”。从左到右按上图重命名并逐一连接；确认轮从开始处分流，不连接任何生成节点。
+拖入 4 个“数据库”、2 个“大模型”、2 个“变量提取器”、2 个“代码”、6 个“分支器”、7 个“消息”和各 1 个“开始/结束”。从左到右按上图重命名并逐一连接；确认轮从开始处分流，不连接任何生成节点。
 
-若数据库节点无法返回同类记录，可删除“读取同类履历”，将开始直接连到“提取履历事实”。若平台“决策”只能判断单值，分别以 `validation_ok`、`confirmation_ok`、`write_ok` 为条件。
+若数据库节点无法返回同类记录，可删除“读取同类履历”，将开始直接连到“提取履历事实”。若平台“分支器”只能判断单值，分别以 `validation_ok`、`confirmation_ok`、`write_ok` 为条件。
 
 ## 6. 实际节点配置与变量映射
 
@@ -105,20 +105,41 @@ flowchart LR
 上下文：{{context_json}}
 ```
 
-### 代码 B：字段校验（JavaScript）
+### 代码 B：字段校验（Python）
 
-```javascript
-const x = typeof resume_entry_json === 'string' ? JSON.parse(resume_entry_json) : resume_entry_json;
-const required = ['experience_type', 'actions'];
-const missing_fields = required.filter(k => !x[k] || (Array.isArray(x[k]) && x[k].length === 0));
-let quality_status = '可直接使用';
-if (!x.result) quality_status = '需要打磨';
-else if (!Array.isArray(x.metrics) || x.metrics.length === 0) quality_status = '缺少量化结果';
-else if (!x.evidence_location) quality_status = '缺少证明材料';
-return { validation_ok: missing_fields.length === 0, missing_fields, quality_status, resume_entry_json: {...x, quality_status} };
+输入区配置 `resume_entry_json｜引用｜变量提取器/resume_entry_json`；输出区声明 `validation_ok:Boolean`、`missing_fields:Array<String>`、`quality_status:String`、`resume_entry_json:Object`：
+
+```python
+import json
+
+
+def main(resume_entry_json):
+    try:
+        value = json.loads(resume_entry_json) if isinstance(resume_entry_json, str) else resume_entry_json
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {
+            "validation_ok": False,
+            "missing_fields": ["json_invalid"],
+            "quality_status": "需要打磨",
+            "resume_entry_json": {},
+        }
+    required = ["experience_type", "actions"]
+    missing_fields = [key for key in required if not value.get(key)]
+    quality_status = "可直接使用"
+    if not value.get("result"):
+        quality_status = "需要打磨"
+    elif not isinstance(value.get("metrics"), list) or not value["metrics"]:
+        quality_status = "缺少量化结果"
+    elif not value.get("evidence_location"):
+        quality_status = "缺少证明材料"
+    value["quality_status"] = quality_status
+    return {
+        "validation_ok": not missing_fields,
+        "missing_fields": missing_fields,
+        "quality_status": quality_status,
+        "resume_entry_json": value,
+    }
 ```
-
-代码节点的输入/返回写法以当前编辑器显示为准；若不支持 JavaScript，改用“变量提取器”把必填字段单独提取，再用“决策”逐项判断。
 
 ### 提示词 C：生成草稿
 
@@ -149,7 +170,56 @@ return { validation_ok: missing_fields.length === 0, missing_fields, quality_sta
 - [ ] 两个 `uid` 的履历互不可见。
 - [ ] 下游 WF-08 可从 `resume_entries` 读取行为证据，主 Agent 可把完成结果交给 WF-12。
 
-## 数据库与输入输出配置教程
+## 节点逐项配置
+
+<!-- GENERATED-NODE-LEDGER:START -->
+### 画布节点连线与页面输入输出总表
+
+本表由流程图生成，用于防止漏连。‘直接上游’决定页面引用下拉框中可选的数据来源；具体变量名以本文件后续业务映射表为准。
+开始节点类型规则：`uid/session_id/AGENT_USER_INPUT` 及所有 `*_json/*_token/*_id` 均选 String；计数、天数选 Integer；真伪开关选 Boolean。表中未特别标注的输入一律选 String，JSON 作为字符串传递。
+
+| 节点 | 类型 | 直接上游（输入来源） | 固定/声明输出 | 直接下游 |
+|---|---|---|---|---|
+| `S` N00 开始 | 开始 | 无（起点） | 开始节点中声明的同名变量 | CM |
+| `CM` N01 分支器：是否为确认轮 | 分支器 | S | 不产生业务变量；按条件输出连线 | PR（是）、R（否） |
+| `PR` N02 数据库：读取 pending_resume_draft | 数据库 | CM | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | TC |
+| `TC` N03 分支器：token 与 confirm_action 是否匹配 | 分支器 | PR | 不产生业务变量；按条件输出连线 | CI（否）、W（是） |
+| `CI` N04 消息：确认无效或草稿过期 | 消息 | TC | 不新增业务变量；回答内容引用上游变量 | Z |
+| `Z` N05 结束 | 结束 | CI、US、Q、GF、P、F、O | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
+| `W` N06 数据库：写入履历 | 数据库 | TC | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | K |
+| `R` N07 数据库：读取同类履历 | 数据库 | CM | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | E |
+| `E` N08 大模型：提取履历事实 | 大模型 | R | `output:String` | X |
+| `X` N09 变量提取器：提取履历字段 | 变量提取器 | E | `resume_entry_json:String`（仅含用户事实的履历字段 JSON） | U |
+| `U` N10 分支器：是否为伪造请求 | 分支器 | X | 不产生业务变量；按条件输出连线 | US（是）、V（否） |
+| `US` N11 消息：拒绝伪造并帮助真实改写 | 消息 | U | 不新增业务变量；回答内容引用上游变量 | Z |
+| `V` N12 代码：校验履历字段 | 代码 | U | 与 Python `main()` 返回 dict 的键完全一致 | D |
+| `D` N13 分支器：字段是否可生成 | 分支器 | V | 不产生业务变量；按条件输出连线 | Q（否）、G（是） |
+| `Q` N14 消息：追问缺失信息 | 消息 | D | 不新增业务变量；回答内容引用上游变量 | Z |
+| `G` N15 大模型：生成履历草稿 | 大模型 | D | `output:String` | GX |
+| `GX` N16 变量提取器：提取最终履历 | 变量提取器 | G | `final_resume_entry_json:String`（润色后待校验履历 JSON） | GV |
+| `GV` N17 代码：校验最终履历 | 代码 | GX | 与 Python `main()` 返回 dict 的键完全一致 | GD |
+| `GD` N18 分支器：最终草稿是否有效 | 分支器 | GV | 不产生业务变量；按条件输出连线 | GF（否）、PW（是） |
+| `GF` N19 消息：草稿解析失败 | 消息 | GD | 不新增业务变量；回答内容引用上游变量 | Z |
+| `PW` N20 数据库：保存 pending_resume_draft | 数据库 | GD | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | P |
+| `P` N21 消息：展示草稿与 confirmation_token | 消息 | PW | 不新增业务变量；回答内容引用上游变量 | Z |
+| `K` N22 分支器：写入是否成功 | 分支器 | W | 不产生业务变量；按条件输出连线 | F（否）、O（是） |
+| `F` N23 消息：写入失败 | 消息 | K | 不新增业务变量；回答内容引用上游变量 | Z |
+| `O` N24 消息：保存成功 | 消息 | K | 不新增业务变量；回答内容引用上游变量 | Z |
+<!-- GENERATED-NODE-LEDGER:END -->
+
+> 本节必须与[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)一起使用。先按流程图编号拖入节点并连线，再配置节点；未连线时下游“引用”下拉框会显示暂无数据。
+
+### 本工作流所有节点的页面填写顺序
+
+1. **开始**：按下方开始输入表逐行“+ 添加”，变量名、类型和必填状态照表填写。
+2. **自定义 SQL 数据库**：输入参数选择引用；读取结果只使用固定输出 `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>`。
+3. **表单新增/更新数据库**：选择 `university / 目标表`；新增在“设置新增数据”逐字段添加，更新先在“设置数据范围”配置 AND 条件，再在“设置更新数据”逐字段添加；固定输出仍为 `isSuccess/message/outputList`。
+4. **大模型**：输入参数名与 `{{变量名}}` 完全一致；系统提示词放角色、规则和 JSON 结构，用户提示词只放本轮变量；输出 `output:String`。
+5. **变量提取器**：输入固定为 `input｜引用｜上游大模型/output`；每个输出必须填写变量名、类型和提取描述，复杂 JSON 先用 String。
+6. **代码**：仅使用 Python `def main(...): return {...}`；输入名与形参一致，输出区声明每个返回键及类型。
+7. **分支器**：左侧选上游变量，条件选“等于”等操作；与字面量比较时比较类型选常量/固定值；每条分支和默认分支都必须连接。
+8. **消息**：输入区引用需要展示的变量，在“回答内容”用 `{{变量名}}`；流式输出关闭；消息后连接共享结束。
+9. **结束**：回答模式选“返回设定格式配置的回答”，输出设置 `output｜引用｜上游最终结果`。所有成功、失败、待补充消息都进入同一个结束节点。
 
 本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
 
@@ -161,7 +231,10 @@ return { validation_ok: missing_fields.length === 0, missing_fields, quality_sta
 |---|---|---|
 | `AGENT_USER_INPUT` | 开始节点 | `把我完成的校园网站项目写成简历条目`；确认轮 `确认保存这条履历` |
 | `uid` | 主 Agent | `test_user_001` |
+| `session_id` | 主 Agent/会话上下文 | `SESSION-TEST-001` |
+| `context_json` | 上游工作流/共享状态 | 可选，相关任务或项目事实 |
 | `entry_type` | 变量提取器 | `项目` |
+| `confirm_action` | 总流程/变量提取器 | `none/modify/confirm/cancel` |
 | `confirmation_token` | 首轮结束输出 | 确认轮原样传回 |
 
 查询同类履历：

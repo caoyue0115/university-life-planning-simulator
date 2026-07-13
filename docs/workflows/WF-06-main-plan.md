@@ -6,7 +6,7 @@
 
 ## 2. 准备与输入
 
-开始输入：`AGENT_USER_INPUT`,`uid`,`session_id`,`profile_json`,`parallel_versions_json`,`selected_version_name`，可选 `existing_main_plan_json`。准备“主规划”和“规划历史”数据实体；具体表字段和数据库操作以当前编辑器显示为准。若数据库能力不满足，使用“长期记忆检索/长期记忆写入”，以 `uid` 加 `main_plan`/`plan_history` 键区分。
+开始输入：`AGENT_USER_INPUT`,`uid`,`session_id`,`profile_json`,`parallel_versions_json`,`selected_version_name`，可选 `existing_main_plan_json`。准备“主规划”和“规划历史”数据实体；具体表字段和数据库操作按本文件逐栏配置。若数据库能力不满足，使用“长期记忆检索/长期记忆写入”，以 `uid` 加 `main_plan`/`plan_history` 键区分。
 
 ## 3. 最小可运行版
 
@@ -22,27 +22,27 @@
 
 ```mermaid
 flowchart LR
-    A["开始"] --> A1["变量提取器：提取 confirm_action 与 confirmation_token"]
-    A1 --> A2["数据库：读取 pending_plan"] --> A3{"分支器：本轮是否确认"}
-    A3 -- "none/modify：创建草稿" --> B["数据库：读取现有主规划"]
-    A3 -- "confirm：确认草稿" --> V["代码：校验 token 与确认动作"]
-    A3 -- "cancel：取消草稿" --> DC["数据库：删除 pending_plan（取消）"] --> MC["消息：已取消，主规划未改变"] --> Z5["结束：cancelled"]
+    A["N00 开始"] --> A1["N01 变量提取器：提取 confirm_action 与 confirmation_token"]
+    A1 --> A2["N02 数据库：读取 pending_plan"] --> A3{"N03 分支器：本轮是否确认"}
+    A3 -- "none/modify：创建草稿" --> B["N04 数据库：读取现有主规划"]
+    A3 -- "confirm：确认草稿" --> V["N05 代码：校验 token 与确认动作"]
+    A3 -- "cancel：取消草稿" --> DC["N06 数据库：删除 pending_plan（取消）"] --> MC["N07 消息：已取消，主规划未改变"] --> Z5["N08 结束：cancelled"]
     V -- "无效" --> E
     V -- "有效" --> L
-    B --> C["代码：定位选中版本"]
-    C --> D{"分支器：版本有效"}
-    D -- "否" --> E["消息：要求重新选择"] --> Z1["结束：needs_input"]
-    D -- "是" --> F["大模型：生成四层规划草案"]
-    F --> G["变量提取器：提取主规划"] --> H["代码：校验规划"]
-    H --> I["数据库：保存 pending_plan + confirmation_token"] --> J{"决策：草稿保存成功"}
-    J -- "否" --> O["消息：写入失败"] --> Z3["结束：write_failed"]
-    J -- "是" --> K["消息：展示草稿与确认口令"] --> Z2["结束：awaiting_confirmation"]
-    L["数据库：写入历史版本"] --> L1{"决策：历史写入成功/无需历史"}
+    B --> C["N09 代码：定位选中版本"]
+    C --> D{"N10 分支器：版本有效"}
+    D -- "否" --> E["N11 消息：要求重新选择"] --> Z1["N12 结束：needs_input"]
+    D -- "是" --> F["N13 大模型：生成四层规划草案"]
+    F --> G["N14 变量提取器：提取主规划"] --> H["N15 代码：校验规划"]
+    H --> I["N16 数据库：保存 pending_plan + confirmation_token"] --> J{"N17 分支器：草稿保存成功"}
+    J -- "否" --> O["N18 消息：写入失败"] --> Z3["N19 结束：write_failed"]
+    J -- "是" --> K["N20 消息：展示草稿与确认口令"] --> Z2["N21 结束：awaiting_confirmation"]
+    L["N22 数据库：写入历史版本"] --> L1{"N23 分支器：历史写入成功/无需历史"}
     L1 -- "否" --> O
-    L1 -- "是" --> M["数据库：写入主规划"]
-    M --> N{"决策：主规划写入成功"}
-    N -- "否" --> C1["数据库：写入一致性异常记录"] --> O
-    N -- "是" --> D1["数据库：删除 pending_plan"] --> P["消息：保存成功"] --> Z4["结束：write_succeeded"]
+    L1 -- "是" --> M["N24 数据库：写入主规划"]
+    M --> N{"N25 分支器：主规划写入成功"}
+    N -- "否" --> C1["N26 数据库：写入一致性异常记录"] --> O
+    N -- "是" --> D1["N27 数据库：删除 pending_plan"] --> P["N28 消息：保存成功"] --> Z4["N29 结束：write_succeeded"]
 ```
 
 ```text
@@ -63,7 +63,7 @@ flowchart LR
 
 ## 5. 拖拽、连线、节点配置与变量映射
 
-按上图拖入 8 个“数据库”（读 pending、读旧规划、存 pending、写历史、写主规划、写一致性异常、成功后删 pending、取消时删 pending）、2 个“代码”、2 个“分支器”、3 个“决策”、1 个“大模型”、2 个“变量提取器”、5 个“消息”和 5 个“结束”。确认发生在下一次工作流调用，图中不存在“消息后读取同一轮输入”的确认决策。
+按上图拖入 8 个“数据库”（读 pending、读旧规划、存 pending、写历史、写主规划、写一致性异常、成功后删 pending、取消时删 pending）、3 个“代码”、5 个“分支器”、1 个“大模型”、2 个“变量提取器”、5 个“消息”和 5 个“结束”。确认发生在下一次工作流调用，图中不存在“消息后读取同一轮输入”的确认分支器。
 
 | 节点 | 输入 | 输出/条件 |
 |---|---|---|
@@ -83,6 +83,63 @@ flowchart LR
 
 规划校验必须检查：`plan_id,version_name,target_route,stage,semester_goals,monthly_milestones,weekly_actions,success_criteria,resources,risks,alternatives,not_do_list,change_reason,created_at`。每项周行动含 `task,deadline,priority,expected_evidence`。当 `change_type=switch/replace` 时 `change_reason` 必须为非空字符串，否则不允许保存 pending。
 
+### 三个代码节点：页面输入、Python 与输出
+
+N05 输入区依次添加 `pending_plan_json`、`confirm_action`、`confirmation_token`、`uid`，均选择“引用”；输出区添加 `confirmation_valid:Boolean`、`confirmation_error:String`：
+
+```python
+import json
+
+def main(pending_plan_json, confirm_action, confirmation_token, uid):
+    try:
+        pending = json.loads(pending_plan_json) if isinstance(pending_plan_json, str) else (pending_plan_json or {})
+        valid = (
+            confirm_action == "confirm"
+            and bool(confirmation_token)
+            and pending.get("confirmation_token") == confirmation_token
+            and pending.get("uid") == uid
+            and pending.get("status") == "pending"
+        )
+        return {"confirmation_valid": valid, "confirmation_error": "" if valid else "确认动作、用户、token 或 pending 状态不匹配"}
+    except Exception as exc:
+        return {"confirmation_valid": False, "confirmation_error": str(exc)}
+```
+
+N09 输入区添加 `parallel_versions_json`、`selected_version_name`、`existing_main_plan_json`；输出区添加 `selected_version:Object`、`version_valid:Boolean`、`change_type:String`：
+
+```python
+import json
+
+def main(parallel_versions_json, selected_version_name, existing_main_plan_json):
+    try:
+        source = json.loads(parallel_versions_json) if isinstance(parallel_versions_json, str) else (parallel_versions_json or {})
+        versions = source.get("versions", source if isinstance(source, list) else [])
+        selected = next((item for item in versions if item.get("version_name") == selected_version_name), {})
+        old = json.loads(existing_main_plan_json) if isinstance(existing_main_plan_json, str) else (existing_main_plan_json or {})
+        change_type = "create" if not old else ("switch" if old.get("version_name") != selected_version_name else "replace")
+        return {"selected_version": selected, "version_valid": bool(selected), "change_type": change_type}
+    except Exception:
+        return {"selected_version": {}, "version_valid": False, "change_type": "create"}
+```
+
+N15 输入区添加 `main_plan_json`、`change_type`；输出区添加 `plan_valid:Boolean`、`plan_error:String`：
+
+```python
+import json
+
+def main(main_plan_json, change_type):
+    try:
+        plan = json.loads(main_plan_json) if isinstance(main_plan_json, str) else (main_plan_json or {})
+        required = ["plan_id", "version_name", "target_route", "stage", "semester_goals", "monthly_milestones", "weekly_actions", "success_criteria", "resources", "risks", "alternatives", "not_do_list", "created_at"]
+        missing = [key for key in required if key not in plan or plan.get(key) in (None, "")]
+        if change_type in ("switch", "replace") and not plan.get("change_reason"):
+            missing.append("change_reason")
+        valid = not missing and all(all(k in item for k in ("task", "deadline", "priority", "expected_evidence")) for item in plan.get("weekly_actions", []))
+        return {"plan_valid": valid, "plan_error": "" if valid else "缺失或无效字段：" + ",".join(missing)}
+    except Exception as exc:
+        return {"plan_valid": False, "plan_error": str(exc)}
+```
+
 ## 6. 可复制完整提示词
 
 ```text
@@ -100,7 +157,7 @@ user_request={{AGENT_USER_INPUT}}
 
 ## 7. 确认与写入失败处理
 
-第一次调用只保存 `pending_plan_json + confirmation_token` 并返回 `status=awaiting_confirmation`，明确列出版本、替换关系、历史处理和 `change_reason`。下一次调用必须携带该 token 且 `confirm_action=confirm`，重新读取 pending 后才进入正式写入；cancel 删除 pending，modify 生成新 pending 和新 token。数据库字段以当前编辑器显示为准；没有明确成功标识时回读验证。任何门控失败返回 `write_failed`，只有主规划回读成功才返回 `write_succeeded`。
+第一次调用只保存 `pending_plan_json + confirmation_token` 并返回 `status=awaiting_confirmation`，明确列出版本、替换关系、历史处理和 `change_reason`。下一次调用必须携带该 token 且 `confirm_action=confirm`，重新读取 pending 后才进入正式写入；cancel 删除 pending，modify 生成新 pending 和新 token。数据库字段按本文件逐栏配置；没有明确成功标识时回读验证。任何门控失败返回 `write_failed`，只有主规划回读成功才返回 `write_succeeded`。
 
 ## 8. 调试用例
 
@@ -118,7 +175,61 @@ user_request={{AGENT_USER_INPUT}}
 - [ ] 数据读写按 `uid` 隔离，失败不声称成功。
 - [ ] 输出 `main_plan_json` 可交给 WF-07；修改建议可由 WF-08 返回本流程重新确认。
 
-## 数据库与输入输出配置教程
+## 节点逐项配置
+
+<!-- GENERATED-NODE-LEDGER:START -->
+### 画布节点连线与页面输入输出总表
+
+本表由流程图生成，用于防止漏连。‘直接上游’决定页面引用下拉框中可选的数据来源；具体变量名以本文件后续业务映射表为准。
+开始节点类型规则：`uid/session_id/AGENT_USER_INPUT` 及所有 `*_json/*_token/*_id` 均选 String；计数、天数选 Integer；真伪开关选 Boolean。表中未特别标注的输入一律选 String，JSON 作为字符串传递。
+
+| 节点 | 类型 | 直接上游（输入来源） | 固定/声明输出 | 直接下游 |
+|---|---|---|---|---|
+| `A` N00 开始 | 开始 | 无（起点） | 开始节点中声明的同名变量 | A1 |
+| `A1` N01 变量提取器：提取 confirm_action 与 confirmation_token | 变量提取器 | A | `confirm_action:String`（none/modify/confirm/cancel）、`confirmation_token:String`（用户原样提供） | A2 |
+| `A2` N02 数据库：读取 pending_plan | 数据库 | A1 | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | A3 |
+| `A3` N03 分支器：本轮是否确认 | 分支器 | A2 | 不产生业务变量；按条件输出连线 | B（"none/modify：创建草稿"）、V（"confirm：确认草稿"）、DC（"cancel：取消草稿"） |
+| `B` N04 数据库：读取现有主规划 | 数据库 | A3 | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | C |
+| `V` N05 代码：校验 token 与确认动作 | 代码 | A3 | 与 Python `main()` 返回 dict 的键完全一致 | E（"无效"）、L（"有效"） |
+| `DC` N06 数据库：删除 pending_plan（取消） | 数据库 | A3 | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | MC |
+| `MC` N07 消息：已取消，主规划未改变 | 消息 | DC | 不新增业务变量；回答内容引用上游变量 | Z5 |
+| `Z5` N08 结束：cancelled | 结束 | MC | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
+| `E` N11 消息：要求重新选择 | 消息 | V、D | 不新增业务变量；回答内容引用上游变量 | Z1 |
+| `L` N22 数据库：写入历史版本 | 数据库 | V | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | L1 |
+| `C` N09 代码：定位选中版本 | 代码 | B | 与 Python `main()` 返回 dict 的键完全一致 | D |
+| `D` N10 分支器：版本有效 | 分支器 | C | 不产生业务变量；按条件输出连线 | E（"否"）、F（"是"） |
+| `Z1` N12 结束：needs_input | 结束 | E | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
+| `F` N13 大模型：生成四层规划草案 | 大模型 | D | `output:String` | G |
+| `G` N14 变量提取器：提取主规划 | 变量提取器 | F | `main_plan_json:String`（完整四层主规划 JSON） | H |
+| `H` N15 代码：校验规划 | 代码 | G | 与 Python `main()` 返回 dict 的键完全一致 | I |
+| `I` N16 数据库：保存 pending_plan + confirmation_token | 数据库 | H | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | J |
+| `J` N17 分支器：草稿保存成功 | 分支器 | I | 不产生业务变量；按条件输出连线 | O（"否"）、K（"是"） |
+| `O` N18 消息：写入失败 | 消息 | J、L1、C1 | 不新增业务变量；回答内容引用上游变量 | Z3 |
+| `Z3` N19 结束：write_failed | 结束 | O | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
+| `K` N20 消息：展示草稿与确认口令 | 消息 | J | 不新增业务变量；回答内容引用上游变量 | Z2 |
+| `Z2` N21 结束：awaiting_confirmation | 结束 | K | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
+| `L1` N23 分支器：历史写入成功/无需历史 | 分支器 | L | 不产生业务变量；按条件输出连线 | O（"否"）、M（"是"） |
+| `M` N24 数据库：写入主规划 | 数据库 | L1 | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | N |
+| `N` N25 分支器：主规划写入成功 | 分支器 | M | 不产生业务变量；按条件输出连线 | C1（"否"）、D1（"是"） |
+| `C1` N26 数据库：写入一致性异常记录 | 数据库 | N | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | O |
+| `D1` N27 数据库：删除 pending_plan | 数据库 | N | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | P |
+| `P` N28 消息：保存成功 | 消息 | D1 | 不新增业务变量；回答内容引用上游变量 | Z4 |
+| `Z4` N29 结束：write_succeeded | 结束 | P | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
+<!-- GENERATED-NODE-LEDGER:END -->
+
+> 本节必须与[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)一起使用。先按流程图编号拖入节点并连线，再配置节点；未连线时下游“引用”下拉框会显示暂无数据。
+
+### 本工作流所有节点的页面填写顺序
+
+1. **开始**：按下方开始输入表逐行“+ 添加”，变量名、类型和必填状态照表填写。
+2. **自定义 SQL 数据库**：输入参数选择引用；读取结果只使用固定输出 `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>`。
+3. **表单新增/更新数据库**：选择 `university / 目标表`；新增在“设置新增数据”逐字段添加，更新先在“设置数据范围”配置 AND 条件，再在“设置更新数据”逐字段添加；固定输出仍为 `isSuccess/message/outputList`。
+4. **大模型**：输入参数名与 `{{变量名}}` 完全一致；系统提示词放角色、规则和 JSON 结构，用户提示词只放本轮变量；输出 `output:String`。
+5. **变量提取器**：输入固定为 `input｜引用｜上游大模型/output`；每个输出必须填写变量名、类型和提取描述，复杂 JSON 先用 String。
+6. **代码**：仅使用 Python `def main(...): return {...}`；输入名与形参一致，输出区声明每个返回键及类型。
+7. **分支器**：左侧选上游变量，条件选“等于”等操作；与字面量比较时比较类型选常量/固定值；每条分支和默认分支都必须连接。
+8. **消息**：输入区引用需要展示的变量，在“回答内容”用 `{{变量名}}`；流式输出关闭；消息后连接共享结束。
+9. **结束**：回答模式选“返回设定格式配置的回答”，输出设置 `output｜引用｜上游最终结果`。所有成功、失败、待补充消息都进入同一个结束节点。
 
 本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
 
@@ -130,7 +241,13 @@ user_request={{AGENT_USER_INPUT}}
 |---|---|---|
 | `AGENT_USER_INPUT` | 开始节点 | `保存就业版为主规划`；下一轮 `确认保存` |
 | `uid` | 主 Agent | `test_user_001` |
+| `session_id` | 主 Agent/会话上下文 | `SESSION-TEST-001` |
+| `profile_json` | WF-01/DB-01 | 已确认画像 |
+| `parallel_versions_json` | WF-05/DB-04 | 已校验的平行版本 JSON |
+| `selected_version_name` | 用户选择/上游变量 | 例如 `就业版` |
+| `existing_main_plan_json` | 当前规划查询 | 可选；新用户为空对象 |
 | `comparison_id` | WF-05 | DB-04 中的比较 ID |
+| `confirm_action` | 总流程/变量提取器 | `none/modify/confirm/cancel` |
 | `confirmation_token` | 首轮结束输出 | 第二轮原样传回 |
 
 数据库顺序必须是：读取比较/当前规划 → 保存 pending → 下一轮读取 pending → 历史写入成功门控 → 正式主规划写入 → 回读验证。

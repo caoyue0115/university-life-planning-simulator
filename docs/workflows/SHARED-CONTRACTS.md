@@ -1,6 +1,6 @@
 # 工作流共享协议
 
-本文是 WF-01～WF-12 的统一契约。平台字段名、数据库动作名称和按钮位置若与本文不同，均**以当前编辑器显示为准**；保持本文变量名和语义不变即可。
+本文是 WF-01～WF-12 的统一契约。页面操作以[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)为准：读取选“自定义 SQL”，新增/更新选“表单处理数据”，条件判断选“分支器”，代码节点只填 Python。
 
 数据库用户隔离统一使用平台自动生成的 `uid`。外部调用若使用其他用户标识名称，必须在进入工作流时先映射成 `uid`；数据库模板不得再创建重复的用户标识字段。每张表的 `id`、`uid`、`create_time` 都由平台自动创建。
 
@@ -64,7 +64,7 @@
 
 “好的”“继续”等模糊表达不得当作关键确认。确认内容至少含目标对象和动作，例如“确认保存这份画像”。保存用户画像、主规划、重要履历，覆盖/切换计划和删除记录都必须先确认。修改后产生新草稿，状态重新变为 `awaiting_confirmation`。
 
-写入节点后必须接“决策”检查平台返回的成功标志；若平台没有稳定成功标志，使用第二个“数据库”按 `uid + record_key` 回读并比较 `record_version`。无法回读时只能返回 `confirmed` 或 `write_failed`，不能说“保存成功”。
+写入节点后必须接“分支器”检查数据库固定输出 `isSuccess`；成功分支需要严格等于 `true`。若还要核对业务字段，使用第二个“数据库”按 `uid + record_key` 回读并比较 `record_version`。无法回读时只能返回 `confirmed` 或 `write_failed`，不能说“保存成功”。
 
 纯模拟可以写入 `simulation_state`、`adventure_state` 等续接状态并返回 `awaiting_user_input`；这不是关键规划确认。续接状态必须与 `main_plan`、`user_profile` 分键，模拟过程和结果均不得覆盖正式画像或主规划。
 
@@ -76,15 +76,15 @@
 
 推荐错误码：`missing_input`、`missing_user_id`、`invalid_json`、`missing_required_field`、`knowledge_unavailable`、`write_failed`、`read_failed`、`unsafe_request`。错误分支仍需进入“结束”，保留可读 `reply` 和可执行 `next_action`。
 
-大模型输出必须先经“变量提取器”提取，或经“代码”解析、补空值、校验枚举，再进入“决策/分支器/数据库”。解析失败允许大模型重试一次；仍失败返回 `invalid_json`，不得写入。
+大模型输出必须先经“变量提取器”提取，再经 Python“代码”节点补空值、校验枚举，最后进入“分支器/数据库”。解析失败允许大模型重试一次；仍失败返回 `invalid_json`，不得写入。
 
 ## 5. 共享存储键
 
 逻辑实体建议使用：`user_profile`、`simulation_state`、`adventure_result`、`route_recommendation`、`parallel_versions`、`main_plan`、`semester_tasks`、`action_records`、`resume_entries`、`growth_reviews`、`decision_trials`、`habit_logs`、`session_recaps`。
 
-每条正式记录至少包含：`uid`、`record_key`、`record_version`、`created_at`、`updated_at`、`source_workflow`、`data_json`。时间字段格式以当前编辑器为准；取不到平台时间时让主 Agent 传入，仍取不到则留空并在 `error` 中提示，不伪造时间。
+每条正式记录至少包含：`uid`、`record_key`、`record_version`、`created_at`、`updated_at`、`source_workflow`、`data_json`。平台数据表自动字段为 `id`、`uid`、`create_time`；业务需要的 `created_at/updated_at` 由开始节点或主 Agent 传入。取不到时间就留空并在 `error` 中提示，不伪造时间。
 
-数据库节点的表、查询条件、插入/更新选项**以当前编辑器显示为准**。若不支持目标操作，降级为“长期记忆检索/长期记忆写入”，记忆键使用 `uid:record_key`；若用户隔离能力无法确认，只可跑无写入版。
+数据库读取：模式选“自定义 SQL”，输入区声明 SQL 中的 `{{变量名}}`，固定输出为 `isSuccess/message/outputList`。数据库新增/更新：模式选“表单处理数据”，选择 `university / 表名`，再按“设置新增数据”或“设置数据范围 + 设置更新数据”逐字段引用。若目标操作无法配置，降级为“长期记忆检索/长期记忆写入”，记忆键使用 `uid:record_key`；若用户隔离能力无法确认，只可跑无写入版。
 
 画像字段中的 `self_reported`（自评）、`agent_inferred`（Agent 推断）、`behavior_verified`（行为已验证）必须分开；推断不得冒充事实。政策类知识需带来源、更新时间和“请以学校/主管部门官方渠道为准”。
 
