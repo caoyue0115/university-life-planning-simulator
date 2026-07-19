@@ -1,166 +1,425 @@
-# WF-02 虚拟大学试玩
+# WF-02 虚拟大学试玩：逐节点搭建指南
 
-## 1. 目标与准备
+> 本文件按已经跑通的 WF-01 写法重做。请从 N00 开始按编号拖节点、连线、再配置右侧面板；不要沿用旧版 WF-02 的节点编号。本流程使用你已经选定的“第一种结束方式”：业务内容由“消息”节点展示，结束节点只返回固定闭合标识 `workflow_finished`。
 
-用户确认画像后调用，在约 10～15 分钟按剩余学年进行情景推演，输出 `data.simulation_summary_json`。准备已确认 `profile_json`，逻辑存储键 `simulation_state`；模拟状态与 `main_plan` 严格分离，**不得覆盖正式画像或主规划**。
+## 1. 本工作流最终完成什么
 
-## 2. 最小可运行版
+WF-02 是一个跨多轮对话运行的情景模拟：首轮生成并保存一个待回答事件；下一轮先读取上次事件，再结算用户选择，并生成下一事件或最终总结。
 
-```text
-开始 → 大模型（生成一轮试玩）→ 变量提取器（提取试玩结果）→ 结束
-```
+- 输入：用户本轮原话、`uid`、已确认画像、当前时间。
+- 续接表：`university / simulation_states`。
+- 输出给用户：当前事件、结算结果或最终试玩总结。
+- 不允许写入：`user_profiles`、`main_plans`。
+- 每轮只能处理一个待回答事件，不能在同一轮替用户自动选择。
 
-从左侧拖 1 个“大模型”和 1 个“变量提取器”到开始与结束之间，按图命名连线。开始映射 `AGENT_USER_INPUT`、`profile_json`；提取器输出 `simulation_summary_json`。本版一次生成完整试玩摘要，不支持逐轮选择和续接。
+## 2. 搭建前先准备数据表
 
-## 3. 完整业务版画布与搭建
+在讯飞平台左侧进入“数据库”，选择数据库 `university`，新建数据表 `simulation_states`，使用 [DB-02 导入模板](../database/import-templates/DB-02-simulation-states.xlsx)。平台自动生成且删不掉的 `id`、`uid`、`create_time` 保留，不要重复创建。
 
-完整跨轮画布、节点数量、拖拽连线和逐边映射统一见第 7 节。数据库动作按本文件逐栏配置，不支持时改用“长期记忆检索/长期记忆写入”。
+必须存在以下业务字段：
 
-## 4. 配置与映射
+| 字段 | 类型 | 必填 | 本工作流填写内容 |
+|---|---|---:|---|
+| `state_id` | String | 是 | 本次状态版本标识 |
+| `workflow_id` | String | 是 | 固定 `WF-02` |
+| `state_type` | String | 是 | 固定 `simulation` |
+| `state_json` | String | 是 | 已结算状态 JSON 字符串 |
+| `pending_item_json` | String | 否 | 等待用户回答的事件 JSON 字符串 |
+| `current_index` | Integer | 是 | 已推进到的事件序号 |
+| `completed` | String | 是 | 字符串 `true` 或 `false` |
+| `updated_at` | Time | 是 | 开始节点传入的 `request_time` |
 
-`读取模拟状态` 用 `uid + simulation_state`；先按 `pending_event` 是否存在进入“结算上一事件”或“生成下一事件”，无状态时依据年级初始化：大一最多 4 学年，大二最多 3，大三最多 2。`变量存储器` 保存 `current_year,event_index,resources,choices,opportunities_gained,opportunities_forgone,completed`，仅用于本次执行；跨会话仍写数据库/长期记忆。
+## 3. 画布总结构
 
-提取用户选择时输入 `AGENT_USER_INPUT + current_event.options`，只接受当前选项编号或明确同义表达。保存节点写 `simulation_state` 或 `simulation_result`，不得写 `user_profile/main_plan`。写入检查规则同共享协议；失败返回 `write_failed` 但仍可把当前草稿交给用户复制保存。
+先在左侧拖入：数据库 3 个、代码 3 个、变量提取器 3 个、大模型 2 个、分支器 5 个、消息 6 个。开始和结束使用画布自带节点。
 
-## 5. 可复制的完整提示词
-
-```text
-你是“虚拟大学”主持人。这是情景推演，不是未来预测。
-已确认画像：{{profile_json}}
-当前状态：{{simulation_state}}
-任务：仅生成当前一个关键事件，覆盖课程、社团、科研、比赛、实习、考试、转向或资源冲突之一；给 2～3 个真实可选方案。选择影响时间、精力、资金、能力、履历和机会，但不要显示可机械刷取的精确分数，不承诺录取或就业结果。若资料不足，用中性假设并标记 assumptions。
-只输出 JSON：
-{"event":{"year":"","index":1,"title":"","situation":"","options":[{"id":"A","text":"","tradeoffs":[""]}]},"assumptions":[],"reply":"请用户选择并说明可自定义"}
-```
-
-结算提示词：
-
-```text
-根据 {{simulation_state}}、{{current_event}} 和 {{selected_option}} 结算本轮。保持同一初始条件；描述变化方向，不给伪精确概率。记录得到和放弃的机会，不修改正式画像或主规划。只输出 JSON：
-{"new_state":{"current_year":"","event_index":0,"resources":{"time":"充足|紧张|透支","energy":"充足|紧张|透支","money":"宽裕|可控|吃紧"},"choices":[],"opportunities_gained":[],"opportunities_forgone":[],"completed":false},"reply":"本轮后果和下一步"}
-```
-
-总结节点输出成长画像、关键选择、所得/放弃机会、可能毕业状态、主要风险、重来建议、免责声明，包装为 `simulation_summary_json`。
-
-## 6. 调试、常见错误与验收清单
-
-- 成功：大二画像、新状态，选择 A；观察事件索引增加、选择入栈、未写主规划。
-- 缺失：无已确认画像时立即返回 `missing_required_field`，`next_action=confirm_profile`。
-- 中断：完成一个事件后重新调用，应从同一 `event_index` 续接而非重开。
-- 选项不匹配：走重新选择分支，不让模型自行替用户选。
-- [ ] 剩余学年与年级一致，每学年 2～3 个事件的目标由状态控制。
-- [ ] 成功和写入失败均产生共享包装；失败不声称已保存。
-- [ ] 输出 `data.simulation_summary_json`，下一步可进 WF-03。
-
-## 7. 完整业务版跨轮状态机、节点数量与逐边映射
-
-完整画布包含数据库 3、大模型 3、变量提取器 2、变量存储器 1、分支器 5、消息 5，另加开始和结束各 1。
-
-摆放时把主线节点从开始右侧横向排列；把“回答无效”“事件未保存”消息放对应分支器下方，把“生成试玩总结”支路放“模拟完成”下方；逐条从上游右侧连接点拖到下游左侧连接点，分支边分别选择图中的“是/否”。
-
-清空画布到仅余开始/结束后，依次从左侧拖入并重命名“读取模拟状态、判断是否有 pending_event、提取上一事件回答、判断回答有效、结算上一事件、提取新状态、保存本次运行状态、判断模拟完成、生成下一事件、保存 pending_event、展示下一事件、生成试玩总结、保存模拟结果、检查写入结果、错误提示”，按下图连线。核心时序是：**有 `pending_event` 才把本轮输入当答案并结算；没有 `pending_event` 才生成事件，先保存后结束等待。**
+### 3.1 读取和入口分流
 
 ```mermaid
 flowchart LR
- A["N00 开始｜开始"] --> B["N01 数据库｜读取模拟状态"] --> C{"N02 分支器｜有 pending_event"}
- C -->|是| D["N03 变量提取器｜提取上一事件回答"] --> E{"N04 分支器｜回答有效"}
- E -->|否| F["N05 消息｜请对上一事件重新选择"] --> Z["N06 结束｜结束"]
- E -->|是| G["N07 大模型｜结算上一事件"] --> H["N08 变量提取器｜提取新状态"] --> I["N09 变量存储器｜保存本次运行状态"] --> J{"N10 分支器｜模拟完成"}
- C -->|否| K["N11 大模型｜生成下一事件"] --> L["N12 数据库｜保存 pending_event"] --> M{"N13 分支器｜事件写入成功"}
- J -->|否| K
- M -->|是| N["N14 消息｜展示下一事件"] --> Z
- M -->|否| X["N15 消息｜事件未保存"] --> Z
- J -->|是| O["N16 大模型｜生成试玩总结"] --> P["N17 数据库｜保存模拟结果"] --> Q{"N18 分支器｜结果写入成功"}
- Q -->|是| QS["N19 消息｜试玩结果已保存"] --> Z
- Q -->|否| QF["N20 消息｜试玩结果未保存"] --> Z
+    N00["N00 开始"] --> N01["N01 数据库：读取最新状态"]
+    N01 --> N02{"N02 分支器：读取成功？"}
+    N02 -->|否| N25["N25 消息：读取失败"]
+    N02 -->|是| N03["N03 代码：整理状态记录"]
+    N03 --> N04{"N04 分支器：存在待回答事件？"}
+    N04 -->|否| N05["N05 大模型：生成事件"]
+    N04 -->|是| N12["N12 变量提取器：提取用户选择"]
+    N25 --> N24["N24 公共结束"]
 ```
 
-![WF-02 虚拟大学分支图](images/WF-02-virtual-university.png)
+### 3.2 没有待回答事件：生成并保存事件
 
-逐边变量：A→B `uid`；B→C `simulation_state,pending_event`；C是→D `AGENT_USER_INPUT,pending_event`；D→E `selected_option,is_valid`；E是→G `simulation_state,pending_event,selected_option`；G→H `model_text`；H→I `new_state`（必须清空已结算的 `pending_event`）；I→J `current_year,event_index,choices,completed`；C否/J否→K `profile_json,simulation_state`；K→L `event,uid`；L→M `write_result`；J是→O `simulation_state`；O→P `simulation_summary_json,uid`；P→Q `write_result`。
-
-总结完整提示词：
-
-```text
-你是虚拟大学总结主持人。输入完整模拟状态 {{simulation_state}}。仅依据已结算 choices 生成成长画像、关键选择、获得机会、放弃机会、可能毕业状态、主要风险、重来建议和局限。使用“情景推演/可能”措辞，不给成功概率，不把模拟写成事实，不修改正式画像或主规划。必须包含统一免责声明原文：“每个人的大学都是独一无二的。模拟器给的是“地图”，但“走路”的人是你自己。勇敢去闯，错了也没关系——毕竟，大学本身就是试错成本最低的地方呀！”只输出 JSON：{"growth_profile":[],"key_choices":[],"opportunities_gained":[],"opportunities_forgone":[],"possible_graduation_state":"","risks":[],"replay_advice":[],"limitations":[],"disclaimer":""}
+```mermaid
+flowchart LR
+    N05["N05 大模型：生成事件"] --> N06["N06 变量提取器：提取事件"]
+    N06 --> N07["N07 代码：准备事件状态行"]
+    N07 --> N08["N08 数据库：新增事件状态"]
+    N08 --> N09{"N09 分支器：事件保存成功？"}
+    N09 -->|是| N10["N10 消息：展示事件"]
+    N09 -->|否| N11["N11 消息：事件未保存"]
+    N10 --> N24["N24 公共结束"]
+    N11 --> N24
 ```
 
-结束 `result_json`：事件保存成功为 `{"workflow_id":"WF-02","version":"1.0","status":"awaiting_user_input","reply":"{{event.reply}}","data":{"simulation_state":{{state}},"pending_event":{{event}}},"suggested_writes":[],"next_action":"answer_simulation_event","error":null}`；完成且结果写入成功为 `{"workflow_id":"WF-02","version":"1.0","status":"completed","reply":"试玩已完成，以下是情景推演总结。","data":{"simulation_summary_json":{{summary}}},"suggested_writes":[],"next_action":"start_adventure","error":null}`；回答无效为 `validation_failed`；任一读/写失败分别为 `read_failed/write_failed` 并填统一 `error`。
+### 3.3 有待回答事件：校验、结算和保存
 
-## 节点逐项配置
+```mermaid
+flowchart LR
+    N12["N12 变量提取器：提取用户选择"] --> N13{"N13 分支器：回答有效？"}
+    N13 -->|否| N14["N14 消息：请重新选择"]
+    N13 -->|是| N15["N15 大模型：结算并生成后续"]
+    N15 --> N16["N16 变量提取器：提取结算结果"]
+    N16 --> N17["N17 代码：准备结算状态行"]
+    N17 --> N18["N18 数据库：新增结算状态"]
+    N18 --> N19{"N19 分支器：状态保存成功？"}
+    N19 -->|否| N20["N20 消息：结算未保存"]
+    N19 -->|是| N21{"N21 分支器：模拟完成？"}
+    N21 -->|否| N22["N22 消息：展示结算和下一事件"]
+    N21 -->|是| N23["N23 消息：展示最终总结"]
+    N14 --> N24["N24 公共结束"]
+    N20 --> N24
+    N22 --> N24
+    N23 --> N24
+```
 
-<!-- GENERATED-NODE-LEDGER:START -->
-### 画布节点连线与页面输入输出总表
+所有消息节点 N10、N11、N14、N20、N22、N23、N25 都连接 N24 结束。图中没有任何悬空出口。
 
-本表由流程图生成，用于防止漏连。‘直接上游’决定页面引用下拉框中可选的数据来源；具体变量名以本文件后续业务映射表为准。
-开始节点类型规则：`uid/session_id/AGENT_USER_INPUT` 及所有 `*_json/*_token/*_id` 均选 String；计数、天数选 Integer；真伪开关选 Boolean。表中未特别标注的输入一律选 String，JSON 作为字符串传递。
+## 4. N00 开始：逐行添加输入
 
-| 节点 | 类型 | 直接上游（输入来源） | 固定/声明输出 | 直接下游 |
-|---|---|---|---|---|
-| `A` N00 开始｜开始 | 开始 | 无（起点） | 开始节点中声明的同名变量 | B |
-| `B` N01 数据库｜读取模拟状态 | 数据库 | A | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | C |
-| `C` N02 分支器｜有 pending_event | 分支器 | B | 不产生业务变量；按条件输出连线 | D（是）、K（否） |
-| `D` N03 变量提取器｜提取上一事件回答 | 变量提取器 | C | `selected_option:String`（匹配当前事件选项）、`is_valid:Boolean`（能否结算） | E |
-| `E` N04 分支器｜回答有效 | 分支器 | D | 不产生业务变量；按条件输出连线 | F（否）、G（是） |
-| `F` N05 消息｜请对上一事件重新选择 | 消息 | E | 不新增业务变量；回答内容引用上游变量 | Z |
-| `Z` N06 结束｜结束 | 结束 | F、N、X、QS、QF | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
-| `G` N07 大模型｜结算上一事件 | 大模型 | E | `output:String` | H |
-| `H` N08 变量提取器｜提取新状态 | 变量提取器 | G | `new_state:String`（结算后的完整状态 JSON） | I |
-| `I` N09 变量存储器｜保存本次运行状态 | 变量存储器 | H | 设置或获取的同名变量 | J |
-| `J` N10 分支器｜模拟完成 | 分支器 | I | 不产生业务变量；按条件输出连线 | K（否）、O（是） |
-| `K` N11 大模型｜生成下一事件 | 大模型 | C、J | `output:String` | L |
-| `L` N12 数据库｜保存 pending_event | 数据库 | K | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | M |
-| `M` N13 分支器｜事件写入成功 | 分支器 | L | 不产生业务变量；按条件输出连线 | N（是）、X（否） |
-| `N` N14 消息｜展示下一事件 | 消息 | M | 不新增业务变量；回答内容引用上游变量 | Z |
-| `X` N15 消息｜事件未保存 | 消息 | M | 不新增业务变量；回答内容引用上游变量 | Z |
-| `O` N16 大模型｜生成试玩总结 | 大模型 | J | `output:String` | P |
-| `P` N17 数据库｜保存模拟结果 | 数据库 | O | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | Q |
-| `Q` N18 分支器｜结果写入成功 | 分支器 | P | 不产生业务变量；按条件输出连线 | QS（是）、QF（否） |
-| `QS` N19 消息｜试玩结果已保存 | 消息 | Q | 不新增业务变量；回答内容引用上游变量 | Z |
-| `QF` N20 消息｜试玩结果未保存 | 消息 | Q | 不新增业务变量；回答内容引用上游变量 | Z |
-<!-- GENERATED-NODE-LEDGER:END -->
+点击开始节点，在右侧“输入”区域保留系统自带 `AGENT_USER_INPUT`，再点击“+ 添加”补齐：
 
-> 本节必须与[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)一起使用。先按流程图编号拖入节点并连线，再配置节点；未连线时下游“引用”下拉框会显示暂无数据。
+| 变量名 | 类型 | 必填 | 描述 | 调试值 |
+|---|---|---:|---|---|
+| `AGENT_USER_INPUT` | String | 是 | 用户本轮原话 | `开始虚拟大学` |
+| `uid` | String | 是 | 平台用户唯一标识 | `test_user_001` |
+| `profile_json` | String | 是 | WF-01 已确认画像 JSON | 一条完整画像 JSON |
+| `request_time` | String | 是 | 当前时间，供状态标识和数据库时间字段使用 | `2026-07-19 12:00:00` |
 
-### 本工作流所有节点的页面填写顺序
+## 5. N01 数据库：读取最新状态
 
-1. **开始**：按下方开始输入表逐行“+ 添加”，变量名、类型和必填状态照表填写。
-2. **自定义 SQL 数据库**：输入参数选择引用；读取结果只使用固定输出 `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>`。
-3. **表单新增/更新数据库**：选择 `university / 目标表`；新增在“设置新增数据”逐字段添加，更新先在“设置数据范围”配置 AND 条件，再在“设置更新数据”逐字段添加；固定输出仍为 `isSuccess/message/outputList`。
-4. **大模型**：输入参数名与 `{{变量名}}` 完全一致；系统提示词放角色、规则和 JSON 结构，用户提示词只放本轮变量；输出 `output:String`。
-5. **变量提取器**：输入固定为 `input｜引用｜上游大模型/output`；每个输出必须填写变量名、类型和提取描述，复杂 JSON 先用 String。
-6. **代码**：仅使用 Python `def main(...): return {...}`；输入名与形参一致，输出区声明每个返回键及类型。
-7. **分支器**：左侧选上游变量，条件选“等于”等操作；与字面量比较时比较类型选常量/固定值；每条分支和默认分支都必须连接。
-8. **消息**：输入区引用需要展示的变量，在“回答内容”用 `{{变量名}}`；流式输出关闭；消息后连接共享结束。
-9. **结束**：回答模式选“返回设定格式配置的回答”，输出设置 `output｜引用｜上游最终结果`。所有成功、失败、待补充消息都进入同一个结束节点。
+右侧按下面填写：
 
-本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
-
-创建 `simulation_states` 并上传 [DB-02](../database/import-templates/DB-02-simulation-states.xlsx)；同时确保 DB-01 已创建。
-
-| 开始输入 | 来源 | 调试值 |
-|---|---|---|
-| `AGENT_USER_INPUT` | 开始节点 | 首轮“开始虚拟大学”；下一轮输入选择 |
-| `uid` | 主 Agent | `test_user_001` |
-| `profile_json` | `user_profiles` 查询 | 已确认画像 |
-
-数据库节点配置：
-
-| 节点 | 表/操作 | 输入 | 输出用途 |
-|---|---|---|---|
-| 读取画像 | `user_profiles` 查询 | `uid` | 模拟基线 |
-| 读取模拟状态 | `simulation_states` 自定义查询 | `uid` | pending 事件和状态 |
-| 保存待回答事件 | 表单新增/更新 | `uid,state_id,workflow_id=WF-02,state_json,pending_item_json,current_index,updated_at` | 结束本轮 |
-| 更新状态 | 表单更新 | `id,state_json,pending_item_json,current_index,completed,updated_at` | 保存结算 |
-
-读取状态 SQL：
+- 模式：`自定义SQL`。
+- 选择数据库：`university`。
+- 输入：参数名 `uid`，类型选“引用”，值选 `N00 / uid`。
+- SQL：
 
 ```sql
-SELECT * FROM simulation_states
+SELECT id, uid, state_id, state_json, pending_item_json,
+       current_index, completed, updated_at
+FROM simulation_states
 WHERE uid='{{uid}}' AND workflow_id='WF-02'
-ORDER BY updated_at DESC LIMIT 1;
+ORDER BY updated_at DESC, create_time DESC
+LIMIT 1;
 ```
 
-输入输出链：`数据库.outputList → 状态判断 → 结算/事件大模型 → 校验 JSON → 数据库写入 → isSuccess 分支器 → result_json → 结束.output`。空数组表示首次模拟；有 pending 时必须先用本轮 `AGENT_USER_INPUT` 结算上一事件。
+输出不能自定义，平台固定为 `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>`。
 
-调试：首轮确认保存一个 pending 事件并返回 `awaiting_user_input`；第二轮确认 `current_index` 增加且旧事件已结算；完成时输出 `completed`。临时错误表名应走 `read_failed`，测试后恢复。
+## 6. N02 分支器：数据库读取成功？
+
+先连好 N01→N02，否则“引用变量”会显示暂无数据。
+
+- 引用变量：`N01 / isSuccess`。
+- 选择条件：等于。
+- 比较类型：固定值/常量，不选“引用”。
+- 比较值：`true`。
+- 是 → N03；默认/否 → N25。
+
+查询成功但 `outputList=[]` 是首次运行，仍走“是”。
+
+## 7. N03 代码：整理状态记录
+
+输入区只加一行：`outputList｜引用｜N01 / outputList`。点击“编辑代码”，删除示例代码，粘贴：
+
+```python
+def main(outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    try:
+        current_index = int(row.get("current_index", 0))
+    except:
+        current_index = 0
+    state_json = row.get("state_json", "{}")
+    pending_json = row.get("pending_item_json", "")
+    completed_text = str(row.get("completed", "false")).strip().lower()
+    return {
+        "has_record": len(row) > 0,
+        "record_id": int(row.get("id", 0)) if str(row.get("id", "0")).isdigit() else 0,
+        "state_json": state_json if isinstance(state_json, str) and state_json else "{}",
+        "pending_item_json": pending_json if isinstance(pending_json, str) else "",
+        "current_index": current_index,
+        "has_pending": isinstance(pending_json, str) and len(pending_json.strip()) > 2,
+        "already_completed": completed_text == "true",
+    }
+```
+
+输出区必须逐行声明：
+
+| 变量名 | 类型 | 描述 |
+|---|---|---|
+| `has_record` | Boolean | 是否查到历史状态 |
+| `record_id` | Integer | 最新状态记录 id；没有时为 0 |
+| `state_json` | String | 已结算状态 JSON 字符串 |
+| `pending_item_json` | String | 待回答事件 JSON 字符串 |
+| `current_index` | Integer | 当前事件序号 |
+| `has_pending` | Boolean | 是否有待回答事件 |
+| `already_completed` | Boolean | 是否已经完成 |
+
+代码节点禁止写 `import`，也不要返回 `None`。
+
+## 8. N04 分支器：存在待回答事件？
+
+- 引用变量：`N03 / has_pending`。
+- 条件：等于；比较类型：固定值；比较值：`true`。
+- 是 → N12；默认/否 → N05。
+
+## 9. N05 大模型：生成首个或下一事件
+
+模型选 `Spark4.0 Ultra`，关闭“对话历史”。输入区：
+
+| 参数名 | 参数值 |
+|---|---|
+| `profile_json` | `N00 / profile_json` |
+| `state_json` | `N03 / state_json` |
+| `current_index` | `N03 / current_index` |
+
+系统提示词：
+
+```text
+你是“虚拟大学”情景模拟主持人。只生成一个当前事件，不替用户选择。
+规则：事件必须来自课程、社团、科研、竞赛、实习、考试、转向或资源冲突；给 2～3 个都合理的选项；说明时间、精力、预算和机会取舍；不得承诺录取或就业；不得修改正式画像或主规划；未知信息只写 assumptions。
+只输出 JSON：
+{"state_json":{},"event":{"year":"","index":1,"title":"","situation":"","options":[{"id":"A","text":"","tradeoffs":[]}]},"reply":""}
+```
+
+用户提示词：
+
+```text
+已确认画像：{{profile_json}}
+已结算状态：{{state_json}}
+当前事件序号：{{current_index}}
+请生成下一个事件；若没有历史状态，从画像对应年级初始化。只输出系统规定的 JSON。
+```
+
+输出格式 `text`，输出变量 `output:String`，描述填写“一个待回答事件及初始化/续接状态 JSON”。
+
+## 10. N06 变量提取器：提取事件
+
+- 模型：`Spark4.0 Ultra`。
+- 输入：`input｜引用｜N05 / output`。
+- 输出逐行添加：
+
+| 变量名 | 类型 | 描述 |
+|---|---|---|
+| `state_json` | String | 提取完整 state_json 并序列化为 JSON 字符串 |
+| `event_json` | String | 提取完整 event 对象并序列化为 JSON 字符串 |
+| `event_index` | Integer | 提取 event.index；缺失时输出 1 |
+| `reply` | String | 提取给用户看的事件说明和选择提示 |
+
+异常处理保持关闭。
+
+## 11. N07 代码：准备事件状态行
+
+输入：`uid=N00/uid`、`request_time=N00/request_time`、`state_json=N06/state_json`、`event_json=N06/event_json`、`event_index=N06/event_index`、`reply=N06/reply`。
+
+```python
+def main(uid, request_time, state_json, event_json, event_index, reply):
+    try:
+        index_value = int(event_index)
+    except:
+        index_value = 1
+    valid = bool(str(uid).strip()) and len(str(event_json).strip()) > 2
+    return {
+        "row_valid": valid,
+        "state_id": str(uid) + "-WF02-" + str(request_time) + "-" + str(index_value),
+        "workflow_id": "WF-02",
+        "state_type": "simulation",
+        "state_json": str(state_json) if state_json else "{}",
+        "pending_item_json": str(event_json) if event_json else "{}",
+        "current_index": index_value,
+        "completed": "false",
+        "updated_at": str(request_time),
+        "reply": str(reply),
+    }
+```
+
+输出区声明 `row_valid:Boolean`、`state_id:String`、`workflow_id:String`、`state_type:String`、`state_json:String`、`pending_item_json:String`、`current_index:Integer`、`completed:String`、`updated_at:String`、`reply:String`。
+
+## 12. N08 数据库和 N09 分支器：新增事件状态
+
+N08：模式选“表单处理数据”，数据表选 `university / simulation_states`，处理模式选“新增数据”。在“设置新增数据”逐行添加：
+
+| 表字段 | 值 |
+|---|---|
+| `uid` | 若页面强制显示，引用 `N00 / uid`；未显示则不添加 |
+| `state_id` | `N07 / state_id` |
+| `workflow_id` | `N07 / workflow_id` |
+| `state_type` | `N07 / state_type` |
+| `state_json` | `N07 / state_json` |
+| `pending_item_json` | `N07 / pending_item_json` |
+| `current_index` | `N07 / current_index` |
+| `completed` | `N07 / completed` |
+| `updated_at` | `N07 / updated_at` |
+
+N09 引用 `N08 / isSuccess`，等于固定值 `true`：是 → N10，否 → N11。
+
+N10 消息输入 `reply｜引用｜N07/reply`，回答内容 `{{reply}}`；N11 输入 `message｜引用｜N08/message`，回答内容 `事件已生成，但状态没有保存。本轮不要作答，请稍后重试。错误：{{message}}`。两者关闭流式输出并连接 N24。
+
+## 13. N12 变量提取器和 N13 分支器：提取用户选择
+
+N12 模型选 `Spark4.0 Ultra`。输入两行：`user_input=N00/AGENT_USER_INPUT`、`pending_item_json=N03/pending_item_json`。输出：
+
+| 变量名 | 类型 | 描述 |
+|---|---|---|
+| `selected_option` | String | 用户明确选择的当前事件选项 id 或自定义方案 |
+| `answer_valid` | Boolean | 只在确实回答当前事件时为 true |
+| `reason` | String | 无效原因；有效时为空 |
+
+N13 引用 `N12 / answer_valid`，等于固定值 `true`：是 → N15，否 → N14。
+
+N14 消息输入 `reason=N12/reason` 和 `pending_item_json=N03/pending_item_json`，回答内容：
+
+```text
+我还不能确定你选择了当前事件的哪个方案。{{reason}}
+请根据下面的事件回复选项编号，或明确写出你的自定义方案：
+{{pending_item_json}}
+```
+
+关闭流式输出，连接 N24。
+
+## 14. N15 大模型：结算并生成后续
+
+模型 `Spark4.0 Ultra`，关闭对话历史。输入：`profile_json=N00/profile_json`、`state_json=N03/state_json`、`pending_item_json=N03/pending_item_json`、`selected_option=N12/selected_option`、`current_index=N03/current_index`。
+
+系统提示词：
+
+```text
+你是“虚拟大学”结算主持人。依据已展示事件和用户明确选择结算一次，不得改写用户选择，不给成功概率。
+更新 state_json 中的时间、精力、预算、能力方向、choices、opportunities_gained、opportunities_forgone。若剩余模拟尚未完成，同时生成一个新的 pending_item；若完成，pending_item 为空并生成 summary。
+只输出 JSON：
+{"state_json":{},"pending_item":{},"current_index":1,"completed":false,"reply":"","summary":{}}
+```
+
+用户提示词：
+
+```text
+画像：{{profile_json}}
+结算前状态：{{state_json}}
+待回答事件：{{pending_item_json}}
+用户选择：{{selected_option}}
+当前序号：{{current_index}}
+完成标准：根据画像年级覆盖剩余学年，每学年 2～3 个关键事件；达到标准后 completed=true。
+```
+
+输出 `output:String`。
+
+## 15. N16 变量提取器：提取结算结果
+
+输入 `input｜引用｜N15/output`，输出：
+
+| 变量名 | 类型 | 描述 |
+|---|---|---|
+| `state_json` | String | 完整结算后状态 JSON 字符串 |
+| `pending_item_json` | String | 下一事件 JSON；完成时输出 `{}` |
+| `current_index` | Integer | 结算后的事件序号 |
+| `completed` | Boolean | 是否完成全部模拟 |
+| `reply` | String | 本轮结算和下一步提示 |
+| `summary_json` | String | 完成时的完整总结 JSON；未完成输出 `{}` |
+
+## 16. N17 代码：准备结算状态行
+
+输入：`uid=N00/uid`、`request_time=N00/request_time`、N16 的六个输出。
+
+```python
+def main(uid, request_time, state_json, pending_item_json, current_index, completed, reply, summary_json):
+    try:
+        index_value = int(current_index)
+    except:
+        index_value = 0
+    done = completed is True
+    final_reply = str(reply)
+    if done and len(str(summary_json).strip()) > 2:
+        final_reply = final_reply + "\n\n" + str(summary_json)
+    return {
+        "state_id": str(uid) + "-WF02-" + str(request_time) + "-" + str(index_value),
+        "workflow_id": "WF-02",
+        "state_type": "simulation",
+        "state_json": str(state_json) if state_json else "{}",
+        "pending_item_json": "{}" if done else (str(pending_item_json) if pending_item_json else "{}"),
+        "current_index": index_value,
+        "completed_text": "true" if done else "false",
+        "completed_bool": done,
+        "updated_at": str(request_time),
+        "display_reply": final_reply,
+    }
+```
+
+输出区逐行声明 `state_id:String`、`workflow_id:String`、`state_type:String`、`state_json:String`、`pending_item_json:String`、`current_index:Integer`、`completed_text:String`、`completed_bool:Boolean`、`updated_at:String`、`display_reply:String`。
+
+## 17. N18～N23：保存并输出结算结果
+
+N18 与 N08 一样选 `university / simulation_states`、处理模式“新增数据”，但字段值全部引用 N17：`state_id/workflow_id/state_type/state_json/pending_item_json/current_index/completed_text/updated_at`；`completed` 表字段引用 `N17/completed_text`。
+
+N19 引用 `N18/isSuccess`，等于固定值 `true`：否 → N20，是 → N21。
+
+- N20 输入 `message=N18/message`，回答内容：`本轮结算已生成，但状态没有保存，因此不会继续推进。错误：{{message}}`；连接 N24。
+- N21 引用 `N17/completed_bool`，等于固定值 `true`：是 → N23，否 → N22。
+- N22 输入 `reply=N17/display_reply`，回答内容 `{{reply}}`；连接 N24。
+- N23 输入 `reply=N17/display_reply`，回答内容 `{{reply}}`；连接 N24。N23 的名称写“展示最终总结”，方便调试时辨认路径。
+
+## 18. N25 读取失败消息
+
+输入 `message｜引用｜N01/message`；回答内容：
+
+```text
+暂时无法读取你的虚拟大学进度，本轮没有生成或保存新事件。请稍后重试。
+错误：{{message}}
+```
+
+连接 N24。
+
+## 19. N24 结束：按当前选定的第一种方式填写
+
+- 回答模式：`返回设定格式配置的回答`。
+- 输出：参数名 `output`；参数值类型选“输入”；值填写 `workflow_finished`。
+- 思考内容：留空。
+- 回答内容：`本轮处理已结束，请以上方消息节点的提示为准。`
+- 流式输出：关闭。
+
+该配置用于当前手工调试。以后把 WF-02 发布为 API 并嵌入总工作流时，再把上游业务结果统一整理为 `result_json` 并改为引用；当前不要提前改。
+
+## 20. 调试指南：按顺序测试
+
+### 测试 1：首次开始
+
+输入 `AGENT_USER_INPUT=开始虚拟大学`、`uid=test_user_001`、完整 `profile_json`、合法 `request_time`。预期路径：N00→N01→N02 是→N03→N04 否→N05→N06→N07→N08→N09 是→N10→N24。数据库新增一行，`pending_item_json` 非空，`completed=false`。
+
+### 测试 2：回答上次事件
+
+保持同一 uid，输入 N10 展示的选项编号。预期 N04 走“是”、N13 走“是”；数据库再新增一行，而不是覆盖旧行。最新一行 `current_index` 增加。
+
+### 测试 3：无效回答
+
+输入“随便吧”。预期 N13 走“否”到 N14，数据库行数不变。
+
+### 测试 4：读取失败
+
+临时把 N01 表名改错一次。预期 N02 走“否”到 N25；回复不得包含“已保存”。测试后恢复正确表名。
+
+### 测试 5：写入失败
+
+临时让 N18 的必填 `state_id` 留空。预期 N19 走“否”到 N20，不能展示成已经推进。测试后恢复引用。
+
+### 测试 6：完成
+
+把测试状态推进到完成条件。预期 N21 走“是”到 N23；最新数据库记录 `completed=true`、`pending_item_json={}`，消息包含总结和“情景推演并非预测”的说明。
+
+## 21. 验收清单
+
+- [ ] N01 后先判断 `isSuccess`，再由 N03 整理 `outputList`，没有直接让分支器读取数组字段。
+- [ ] 首轮只生成并保存事件，不替用户结算。
+- [ ] 下一轮只结算上次已展示事件。
+- [ ] 每个数据库新增节点都填写全部必填业务字段；平台默认 `id/uid/create_time` 未重复创建。
+- [ ] 所有代码无 `import`，所有返回键都在输出区声明。
+- [ ] 所有“否”分支都连接消息和 N24，没有悬空线。
+- [ ] 模拟状态只写 `simulation_states`，不写画像或主规划表。

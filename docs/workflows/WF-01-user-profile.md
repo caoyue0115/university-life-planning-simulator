@@ -153,11 +153,13 @@ flowchart TD
 | `AGENT_USER_INPUT` | String | 用户本轮对话输入；系统自带 | 是 |
 | `uid` | String | 平台当前用户唯一标识 | 是 |
 | `confirmation_token` | String | 上一轮 WF-01 返回的确认令牌；第一轮为空 | 否 |
+| `request_time` | String | 本轮调用时间，格式 `YYYY-MM-DD HH:mm:ss`；供必填 Time 字段使用 | 是 |
 
 独立调试时填写：
 
 ```text
 uid = test_user_001
+request_time = 2026-07-15 21:30:00
 ```
 
 正式由主 Agent 调用时，主 Agent 必须把真实 uid 传入，不能继续使用测试值。
@@ -168,6 +170,7 @@ N00 输出：
 AGENT_USER_INPUT
 uid
 confirmation_token
+request_time
 ```
 
 ## 6. N01 数据库：读取正式画像及待确认草稿
@@ -248,15 +251,31 @@ N01 / isSuccess
 ```python
 def main(outputList):
     rows = outputList if isinstance(outputList, list) else []
-    row = rows[0] if rows else None
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+
+    try:
+        record_id_value = int(row.get("id", 0))
+    except:
+        record_id_value = 0
+
+    try:
+        record_version_value = int(row.get("record_version", 0))
+    except:
+        record_version_value = 0
+
+    old_profile = row.get("profile_json", "")
+    pending_profile = row.get("pending_profile_json", "")
+    token = row.get("confirmation_token", "")
+    status = row.get("pending_status", "")
+
     return {
-        "has_record": bool(row),
-        "record_id": row.get("id") if row else None,
-        "old_profile_json": row.get("profile_json") or "{}" if row else "{}",
-        "pending_profile_json": row.get("pending_profile_json") or "{}" if row else "{}",
-        "stored_confirmation_token": row.get("confirmation_token") or "" if row else "",
-        "pending_status": row.get("pending_status") or "none" if row else "none",
-        "record_version": int(row.get("record_version") or 0) if row else 0,
+        "has_record": len(row) > 0,
+        "record_id": record_id_value,
+        "old_profile_json": old_profile if isinstance(old_profile, str) and old_profile != "" else "{}",
+        "pending_profile_json": pending_profile if isinstance(pending_profile, str) and pending_profile != "" else "{}",
+        "stored_confirmation_token": token if isinstance(token, str) else "",
+        "pending_status": status if isinstance(status, str) and status != "" else "none",
+        "record_version": record_version_value,
     }
 ```
 
@@ -265,7 +284,7 @@ def main(outputList):
 | 变量名 | 类型 | 描述 |
 |---|---|---|
 | `has_record` | Boolean | 是否读取到该用户的画像记录。 |
-| `record_id` | Integer | 已有记录的 id；新用户没有记录时为空。 |
+| `record_id` | Integer | 已有记录的 id；新用户没有记录时固定为 `0`，禁止返回 `None`。 |
 | `old_profile_json` | String | 已正式确认的画像 JSON 字符串。 |
 | `pending_profile_json` | String | 等待确认的画像 JSON 字符串。 |
 | `stored_confirmation_token` | String | 数据库中保存的确认 token。 |
@@ -399,7 +418,7 @@ Spark4.0 Ultra
 | `profile_json` | String | 从输入 JSON 中提取完整 profile_json 对象，并序列化为合法 JSON 字符串；必须包含对象的全部字段，不要只提取 profile_card。 |
 | `reply` | String | 从输入 JSON 中提取 reply 字段；没有内容时输出空字符串。 |
 
-不要把 `profile_json` 设置成假定存在的 Object 类型；本教程统一设置为 String，下一节点 N06 再使用 `JSON.parse` 校验。
+N05 当前页面可稳定输出 String，因此这里保留 String；N06 只做动作白名单、非空和首尾花括号校验，不调用平台不可用的 JSON 库。其他工作流若变量提取器页面允许选择 Object，则优先直接输出 Object 供代码校验。
 
 ### 10.4 异常处理
 
@@ -417,25 +436,18 @@ profile_json = N05.profile_json
 代码：
 
 ```python
-import json
-
-
 def main(requested_action, profile_json):
-    allowed = {"draft", "modify", "confirm", "cancel"}
-    try:
-        profile = json.loads(profile_json) if isinstance(profile_json, str) else profile_json
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {
-            "valid": False,
-            "error": "profile_json_invalid",
-            "profile_json_string": "",
-        }
-
-    valid = requested_action in allowed and isinstance(profile, dict)
+    action = requested_action if isinstance(requested_action, str) else ""
+    profile_text = profile_json if isinstance(profile_json, str) else ""
+    action = action.strip().lower()
+    profile_text = profile_text.strip()
+    valid_action = action in ["draft", "modify", "confirm", "cancel"]
+    valid_profile = len(profile_text) > 2 and profile_text.startswith("{") and profile_text.endswith("}")
+    valid = valid_action and valid_profile
     return {
         "valid": valid,
-        "error": "" if valid else "required_field_missing",
-        "profile_json_string": json.dumps(profile, ensure_ascii=False) if valid else "",
+        "error": "" if valid else "action_or_profile_invalid",
+        "profile_json_string": profile_text if valid else "",
     }
 ```
 
@@ -535,21 +547,31 @@ N10 has_record=false ──→ N13 新增记录
 
 ```text
 profile_json_string = N06.profile_json_string
+uid = N00.uid
+record_version = N03.record_version
+request_time = N00.request_time
 ```
 
 代码：
 
 ```python
-from datetime import datetime, timezone
-from uuid import uuid4
-
-
-def main(profile_json_string):
+def main(profile_json_string, uid, record_version, request_time):
+    profile_text = profile_json_string if isinstance(profile_json_string, str) else "{}"
+    user_text = uid if isinstance(uid, str) else "anonymous"
+    time_text = request_time if isinstance(request_time, str) else ""
+    try:
+        version = int(record_version)
+    except:
+        version = 0
+    seed = user_text + "|" + str(version + 1) + "|" + profile_text
+    checksum = 2166136261
+    for char in seed:
+        checksum = ((checksum ^ ord(char)) * 16777619) % 4294967296
     return {
-        "pending_profile_json": profile_json_string,
-        "new_confirmation_token": f"profile_{uuid4().hex}",
+        "pending_profile_json": profile_text,
+        "new_confirmation_token": "profile_" + str(version + 1) + "_" + str(checksum),
         "pending_status": "awaiting_confirmation",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": time_text,
     }
 ```
 
@@ -647,7 +669,7 @@ N12 判断 `N11.isSuccess`：true → N15；false → N16。
 | `record_version` | 固定值/常量 | `0` |
 | `updated_at` | 引用 | N09 / updated_at |
 
-`id`、`uid`、`create_time` 是平台自动字段，不要添加。如果你实际页面把 `uid` 标为必须填写而不是自动生成，再额外添加 `uid｜引用｜N00 / uid`。
+N13 页面会自动列出并锁定数据表中标为必填的字段；这些行不能删除，必须逐一赋值。当前实际页面中前三个锁定字段为 `pending_status`、`record_version`、`updated_at`，按上表填写即可。`uid` 不在 N13 输出中是正常现象：它是写入字段，不是数据库节点输出。只有当实际页面把 `uid` 显示为必填输入时，才额外添加 `uid｜引用｜N00 / uid`。平台固定输出仍只有 `isSuccess`、`message`、`outputList`。
 
 平台固定输出 `isSuccess`、`message`、`outputList`。
 
@@ -691,14 +713,12 @@ pending_status = N03.pending_status
 pending_profile_json = N03.pending_profile_json
 has_record = N03.has_record
 record_version = N03.record_version
+request_time = N00.request_time
 ```
 
 代码：
 
 ```python
-from datetime import datetime, timezone
-
-
 def main(
     incoming_token,
     stored_token,
@@ -706,19 +726,27 @@ def main(
     pending_profile_json,
     has_record,
     record_version,
+    request_time,
 ):
+    incoming = incoming_token.strip() if isinstance(incoming_token, str) else ""
+    stored = stored_token.strip() if isinstance(stored_token, str) else ""
+    pending = pending_profile_json.strip() if isinstance(pending_profile_json, str) else ""
     valid = (
         bool(has_record)
         and pending_status == "awaiting_confirmation"
-        and bool(incoming_token)
-        and incoming_token == stored_token
-        and bool(pending_profile_json)
-        and pending_profile_json != "{}"
+        and incoming != ""
+        and incoming == stored
+        and pending != ""
+        and pending != "{}"
     )
+    try:
+        version = int(record_version)
+    except:
+        version = 0
     return {
         "confirmation_valid": valid,
-        "next_record_version": int(record_version or 0) + 1,
-        "confirmed_at": datetime.now(timezone.utc).isoformat(),
+        "next_record_version": version + 1,
+        "confirmed_at": request_time if isinstance(request_time, str) else "",
     }
 ```
 
@@ -806,23 +834,17 @@ outputList = N21.outputList
 代码：
 
 ```python
-import json
-
-
 def main(expected_profile_json, outputList):
-    row = outputList[0] if isinstance(outputList, list) and outputList else None
-
-    def normalize(value):
-        try:
-            parsed = json.loads(value) if isinstance(value, str) else value
-            return json.dumps(parsed, ensure_ascii=False, sort_keys=True)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return ""
-
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    expected = expected_profile_json.strip() if isinstance(expected_profile_json, str) else ""
+    actual_value = row.get("profile_json", "") if len(row) > 0 else ""
+    actual = actual_value.strip() if isinstance(actual_value, str) else ""
     return {
-        "readback_consistent": bool(row)
-        and row.get("pending_status") == "confirmed"
-        and normalize(row.get("profile_json")) == normalize(expected_profile_json)
+        "readback_consistent": len(row) > 0
+        and row.get("pending_status", "") == "confirmed"
+        and expected != ""
+        and actual == expected
     }
 ```
 
@@ -844,7 +866,23 @@ N24：true → N25；false → N26。
 | N28 | 数据库读取失败，附 N01.message | `read_failed` |
 | N29 | 模型 JSON 无效 | `validation_failed` |
 
-所有消息连接 N30。N30 的 `output` 引用对应消息节点输出的完整 `result_json`。
+所有消息节点都连接 N30，不能有任何悬空分支。消息节点本身没有可供结束节点引用的 `result_json` 输出，所以不要再配置“引用对应消息节点/result_json”。
+
+N30 按当前真实页面配置：
+
+快捷抄写：`output｜输入｜workflow_finished`。
+
+| 页面区域 | 填写内容 |
+|---|---|
+| 回答模式 | `返回设定格式配置的回答` |
+| 输出参数名 | `output` |
+| 参数值方式 | `输入` |
+| 参数值 | `workflow_finished` |
+| 思考内容 | 留空 |
+| 回答内容 | `本轮处理已结束，请以上方消息节点的提示为准。` |
+| 流式输出 | 关闭 |
+
+每个 N25～N29 消息节点必须在自己的“回答内容”中写完整的用户提示或完整结果 JSON；N30 只负责统一闭合流程。这正是调试时出现“本轮处理已结束，请以上方消息节点的提示为准”的原因，不代表上方消息节点执行失败。
 
 ## 23. 按顺序调试
 

@@ -1,231 +1,262 @@
-# WF-12 会话结束复盘搭建指南
+# WF-12 会话结束复盘：逐节点搭建指南
 
-## 1. 目标与调用时机
+> WF-12 在一段会话结束时生成两份复盘：给用户看的 `user_recap_json`，以及供主 Agent 下次续接的 `agent_recap_json`。它只能记录用户明确事实和已经成功发生的写入，不能把草稿或失败操作写成状态变化。
 
-用户表达结束或当前任务完成时，生成用户复盘和 Agent 复盘，只保存新增或变化字段，产出 `session_recap_json` 和下次入口。普通闲聊不得直接当作事实，无限增长的画像长文不得写入。
+## 1. 数据表和开始输入
 
-## 2. 搭建前准备
+在 `university` 上传 [DB-11 session_recaps](../database/import-templates/DB-11-session-recaps.xlsx)，保留 `id/uid/create_time`。
 
-- 输入：`AGENT_USER_INPUT`、`uid`、`session_id`、`context_json`；其中 `context_json` 应含本会话已确认结果、写入结果和会话前状态摘要，而非无限完整对话。
-- 读取实体：必要的 `user_profile`、`main_plan`、`semester_tasks`；写入实体：`session_recaps`，必要时仅更新对应实体的变化字段。
-- 所有数据库操作按本文件逐栏配置；不支持局部更新时，复盘只写入 `session_recaps`，由后续工作流按建议变更再次确认。
+N00 开始：
 
-## 3. 最小可运行版
+| 变量 | 类型 | 必填 | 调试值 |
+|---|---|---:|---|
+| `AGENT_USER_INPUT` | String | 是 | `结束并复盘本次会话` |
+| `uid` | String | 是 | `test_user_001` |
+| `session_id` | String | 是 | `SESSION-TEST-001` |
+| `conversation_text` | String | 是 | 本次会话完整文本或主 Agent 整理的逐轮记录 |
+| `successful_writes_json` | String | 是 | 本次真正成功并回读确认的写入；没有则 `{}` |
+| `request_time` | String | 是 | `2026-07-19 22:00:00` |
 
-```text
-开始 → 大模型（生成会话复盘草稿）→ 结束
-```
+`conversation_text` 不是平台自动出现的变量，必须由调用 WF-12 的主 Agent 传入；手工调试时直接粘贴测试对话。
 
-拖入“大模型”，放在开始与结束之间并连线，使用提示词 A。结束输出 `result_json`。此版 `status=draft`，只生成复盘，不声称状态已持久化。
-
-## 4. 完整业务版画布与逐步连线
-
-![WF-12 会话结束复盘完整业务版](images/WF-12-session-recap.png)
+## 2. 完整连线图
 
 ```mermaid
 flowchart LR
-  S[N00 开始] --> R[N01 数据库：读取会话前状态] --> E[N02 大模型：提取新增或变化] --> X[N03 变量提取器：提取双层复盘] --> V[N04 代码：校验变化与来源]
-  V --> H{N05 分支器：是否有可写变化}
-  H -- 否 --> N[N06 消息：返回用户复盘与下次入口] --> Z[N07 结束]
-  H -- 是 --> C{N08 分支器：变化是否需要用户确认}
-  C -- 是 --> P[N09 消息：展示建议变更待确认] --> Z
-  C -- 否 --> W[N10 数据库：写入会话复盘] --> K{N11 分支器：写入是否成功}
-  K -- 否 --> F[N12 消息：写入失败但返回草稿] --> Z
-  K -- 是 --> O[N13 消息：返回复盘与下次入口] --> Z
+    N00["N00 开始"] --> N01["N01 数据库：读取本会话最新复盘"]
+    N01 --> N02{"N02 分支器：读取成功？"}
+    N02 -->|否| N21["N21 消息：历史复盘读取失败"]
+    N02 -->|是| N03["N03 代码：整理版本并校验输入"]
+    N03 --> N04{"N04 分支器：输入有效？"}
+    N04 -->|否| N19["N19 消息：缺少会话内容"]
+    N04 -->|是| N05["N05 大模型：生成双层复盘"]
+    N05 --> N06["N06 变量提取器：提取复盘字段"]
+    N06 --> N07["N07 代码：校验并准备数据库行"]
+    N07 --> N08{"N08 分支器：复盘有效？"}
+    N08 -->|否| N20["N20 消息：复盘结构无效"]
+    N08 -->|是| N09["N09 数据库：新增会话复盘"]
+    N09 --> N10{"N10 分支器：写入成功？"}
+    N10 -->|否| N17["N17 消息：复盘未保存"]
+    N10 -->|是| N11["N11 数据库：回读会话复盘"]
+    N11 --> N12{"N12 分支器：回读 SQL 成功？"}
+    N12 -->|否| N18["N18 消息：回读失败"]
+    N12 -->|是| N13["N13 代码：比较回读结果"]
+    N13 --> N14{"N14 分支器：回读一致？"}
+    N14 -->|是| N16["N16 消息：展示复盘"]
+    N14 -->|否| N18
+    N16 --> N22["N22 公共结束"]
+    N17 --> N22
+    N18 --> N22
+    N19 --> N22
+    N20 --> N22
+    N21 --> N22
 ```
 
-```text
-开始 → 数据库（读取会话前状态）→ 大模型（提取新增或变化）
-→ 变量提取器（提取双层复盘）→ 代码（校验变化与来源）
-→ 分支器（是否有可写变化）
-├─ 否 → 消息（返回用户复盘与下次入口）→ 结束
-└─ 是 → 分支器（变化是否需要用户确认）
-   ├─ 是 → 消息（展示建议变更待确认）→ 结束
-   └─ 否 → 数据库（写入会话复盘）→ 分支器（写入是否成功）
-      ├─ 否 → 消息（写入失败但返回草稿）→ 结束
-      └─ 是 → 消息（返回复盘与下次入口）→ 结束
+所有消息连接 N22 结束。
+
+## 3. N01/N02：读取本会话最新复盘
+
+N01 自定义 SQL，输入 `uid=N00/uid`、`session_id=N00/session_id`：
+
+```sql
+SELECT session_id, user_recap_json, agent_recap_json, new_facts_json,
+       state_changes_json, open_questions_json, next_entry,
+       recap_version, updated_at
+FROM session_recaps
+WHERE uid='{{uid}}' AND session_id='{{session_id}}'
+ORDER BY recap_version DESC, updated_at DESC
+LIMIT 1;
 ```
 
-拖入 1 个“大模型”、1 个“变量提取器”、1 个“代码”、3 个“分支器”、2 个“数据库”、4 个“消息”和各 1 个“开始/结束”，按图命名连接。若无稳定写入标志，再拖入一个“数据库”重命名为“回读会话复盘”，按 `uid + session_id` 比较版本。
+N02：`N01/isSuccess == true`；是 → N03，否 → N21。空数组表示第一次生成该会话复盘，不是失败。
 
-## 5. 实际节点配置与变量映射
+## 4. N03/N04：整理版本并校验输入
 
-| 节点 | 配置 | 输出 |
-|---|---|---|
-| 读取会话前状态 | 按 `uid` 读取必要摘要，禁止跨用户 | `before_state_json` |
-| 提取新增或变化 | 提示词 A，对比 before 与已确认结果 | `recap_text` |
-| 提取双层复盘 | 提取 `user_recap`,`agent_recap`,`state_changes`,`next_entry` | `session_recap_json` |
-| 校验变化与来源 | 代码 B，过滤闲聊、推断和未成功写入事项 | `validated_recap_json`,`has_changes`,`needs_confirmation` |
-| 是否有可写变化 | `has_changes=true` 走是 | 分支 |
-| 变化是否需要用户确认 | 涉及画像、主规划、重要履历、覆盖/删除则为真 | 分支 |
-| 写入会话复盘 | `record_key=session_recaps`，按会话保存压缩记录 | `write_result` |
-| 写入是否成功 | 成功标志或回读一致 | `write_ok` |
-| 结束 | 统一包装 | `result_json` |
-
-结构：
-
-```json
-{"user_recap":{"topics":[],"decisions":[],"next_three_actions":[],"open_questions":[],"next_entry":""},"agent_recap":{"new_facts":[],"preference_changes":[],"route_changes":[],"task_status_changes":[],"inferences_to_verify":[],"recommended_opening":""},"state_changes":[]}
-```
-
-每个 `state_changes` 建议为：
-
-```json
-{"entity":"semester_tasks","field":"task_status","old_value":"todo","new_value":"done","source":"WF-07 write_succeeded","source_type":"confirmed_fact","confirmed":true,"requires_confirmation":false}
-```
-
-## 6. 可复制提示词与代码
-
-### 提示词 A：生成双层复盘
-
-```text
-你是会话状态压缩器。对比“会话前状态”和“本会话已确认结果”，只提取新增或变化，不复写未变化画像，不把普通闲聊当事实，不把 Agent 推断当用户事实，不把 write_failed 的内容当成已保存。
-
-输出单个合法 JSON：
-1) user_recap：topics、decisions、next_three_actions（最多3项且可执行）、open_questions、next_entry；
-2) agent_recap：new_facts、preference_changes、route_changes、task_status_changes、inferences_to_verify、recommended_opening；其中 new_facts 每项必须是含 value、source、source_type、confirmed 的对象，不能只给字符串；
-3) state_changes：每项含 entity、field、old_value、new_value、source、source_type、confirmed、requires_confirmation。source_type 只能为 confirmed_fact、user_reported、agent_inference、casual_chat。
-
-来源不足的内容放进 inferences_to_verify，不进 new_facts。画像、主规划、重要履历、覆盖或删除一律 requires_confirmation=true。若没有变化，state_changes=[]。不得承诺未成功的写入。
-会话前状态：{{before_state_json}}
-本会话上下文：{{context_json}}
-用户结束语：{{AGENT_USER_INPUT}}
-```
-
-### 代码 B：变化校验（Python）
-
-输入区配置 `session_recap_json｜引用｜变量提取器/session_recap_json`；输出区声明 `validated_recap_json:Object`、`has_changes:Boolean`、`needs_confirmation:Boolean`：
+N03 输入 `outputList=N01/outputList`、`uid=N00/uid`、`session_id=N00/session_id`、`conversation_text=N00/conversation_text`、`successful_writes_json=N00/successful_writes_json`：
 
 ```python
-import json
-
-
-def main(session_recap_json):
-    recap = json.loads(session_recap_json) if isinstance(session_recap_json, str) else session_recap_json
-    recap = recap or {}
-
-    def allowed(item):
-        source = str(item.get("source") or "")
-        source_type = item.get("source_type")
-        return (
-            item.get("entity")
-            and item.get("field")
-            and source
-            and item.get("old_value") != item.get("new_value")
-            and "write_failed" not in source
-            and "write failed" not in source
-            and source_type not in {"casual_chat", "agent_inference"}
-            and (source_type == "confirmed_fact" or (source_type == "user_reported" and item.get("confirmed") is True))
-        )
-
-    changes = [item for item in recap.get("state_changes", []) if isinstance(item, dict) and allowed(item)]
-    agent = recap.get("agent_recap") or {}
-    agent["new_facts"] = [
-        item for item in agent.get("new_facts", [])
-        if isinstance(item, dict)
-        and item.get("source_type") not in {"casual_chat", "agent_inference"}
-        and "write_failed" not in str(item.get("source") or "")
-        and (item.get("source_type") == "confirmed_fact" or (item.get("source_type") == "user_reported" and item.get("confirmed") is True))
-    ]
-    recap["agent_recap"] = agent
-    recap["state_changes"] = changes
+def main(outputList, uid, session_id, conversation_text, successful_writes_json):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    try:
+        old_version = int(row.get("recap_version", 0))
+    except:
+        old_version = 0
+    text = str(conversation_text).strip()
+    valid = len(str(uid).strip()) > 0 and len(str(session_id).strip()) > 0 and len(text) >= 20
     return {
-        "validated_recap_json": recap,
-        "has_changes": bool(changes),
-        "needs_confirmation": any(item.get("requires_confirmation") is True and item.get("confirmed") is not True for item in changes),
+        "input_valid": valid,
+        "input_error": "" if valid else "缺少 uid、session_id，或 conversation_text 少于 20 个字符",
+        "conversation_text": text,
+        "successful_writes_json": str(successful_writes_json) if successful_writes_json else "{}",
+        "previous_recap_json": str(row.get("agent_recap_json", "{}")),
+        "next_recap_version": old_version + 1,
     }
 ```
 
-## 7. 确认、安全出口与写入失败
+输出 `input_valid:Boolean`、`input_error:String`、`conversation_text:String`、`successful_writes_json:String`、`previous_recap_json:String`、`next_recap_version:Integer`。N04：true → N05，false → N19。
 
-- 会话复盘本身可作为压缩日志保存；若其中建议修改画像、主规划、重要履历或执行覆盖/删除，必须先让用户确认，或路由回对应工作流完成确认，WF-12 不越权更新。
-- 用户要求删除记录时返回 `next_action=confirm_delete`，不在复盘中暗中删除。
-- 缺 `uid` 时仍可返回用户复盘，但不读取或写入长期状态。
-- 写入失败返回 `status=write_failed`、`next_action=retry_session_recap_write`；可展示复盘草稿，但明确“本次续接状态未保存成功”。
+## 5. N05 大模型：生成双层复盘
 
-## 8. 调试与验收清单
+模型 `Spark4.0 Ultra`，关闭对话历史。这里不要勾选平台“对话历史”，因为完整会话已经通过 `conversation_text` 明确传入，避免混入别的会话。
 
-成功用例：上下文含“WF-07 将任务 A 成功写为 done，用户决定下周整理项目证据”。预期任务变化带成功来源，三件事不超过 3 项，下次入口明确。
+输入：`conversation_text=N03/conversation_text`、`successful_writes_json=N03/successful_writes_json`、`previous_recap_json=N03/previous_recap_json`。
 
-失败用例：上下文含闲聊“我最近觉得自己可能更适合科研”和一次 `write_failed` 的主规划切换。预期前者进入 `inferences_to_verify`，后者不成为已保存事实。模拟数据库失败，回复不得说续接状态已保存。
+系统提示词：
 
-- [ ] 同时生成用户复盘与 Agent 复盘，产出 `session_recap_json`。
-- [ ] 只包含新增或变化字段，未变化画像不重复增长。
-- [ ] 普通闲聊、未验证推断、写入失败不进入事实变化。
-- [ ] 关键变化经过用户确认；写入失败不声称成功。
-- [ ] `next_entry` 和 `recommended_opening` 足以支持下一次会话继续。
-- [ ] 两个 `uid` 回读互不可见。
+```text
+你是大学人生规划模拟器的会话复盘助手。
+生成两层复盘：
+1. user_recap：给用户看，包含本次目标、已完成、尚未完成、关键取舍、下一步，不暴露内部推断。
+2. agent_recap：供下次续接，包含用户明确事实、已确认偏好、真正成功的状态变化、未决问题、下一入口和禁止误记事项。
 
-## 节点逐项配置
-
-<!-- GENERATED-NODE-LEDGER:START -->
-### 画布节点连线与页面输入输出总表
-
-本表由流程图生成，用于防止漏连。‘直接上游’决定页面引用下拉框中可选的数据来源；具体变量名以本文件后续业务映射表为准。
-开始节点类型规则：`uid/session_id/AGENT_USER_INPUT` 及所有 `*_json/*_token/*_id` 均选 String；计数、天数选 Integer；真伪开关选 Boolean。表中未特别标注的输入一律选 String，JSON 作为字符串传递。
-
-| 节点 | 类型 | 直接上游（输入来源） | 固定/声明输出 | 直接下游 |
-|---|---|---|---|---|
-| `S` N00 开始 | 开始 | 无（起点） | 开始节点中声明的同名变量 | R |
-| `R` N01 数据库：读取会话前状态 | 数据库 | S | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | E |
-| `E` N02 大模型：提取新增或变化 | 大模型 | R | `output:String` | X |
-| `X` N03 变量提取器：提取双层复盘 | 变量提取器 | E | `user_recap:String`、`agent_recap:String`、`state_changes:String`、`next_entry:String`、`session_recap_json:String` | V |
-| `V` N04 代码：校验变化与来源 | 代码 | X | 与 Python `main()` 返回 dict 的键完全一致 | H |
-| `H` N05 分支器：是否有可写变化 | 分支器 | V | 不产生业务变量；按条件输出连线 | N（否）、C（是） |
-| `N` N06 消息：返回用户复盘与下次入口 | 消息 | H | 不新增业务变量；回答内容引用上游变量 | Z |
-| `Z` N07 结束 | 结束 | N、P、F、O | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
-| `C` N08 分支器：变化是否需要用户确认 | 分支器 | H | 不产生业务变量；按条件输出连线 | P（是）、W（否） |
-| `P` N09 消息：展示建议变更待确认 | 消息 | C | 不新增业务变量；回答内容引用上游变量 | Z |
-| `W` N10 数据库：写入会话复盘 | 数据库 | C | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | K |
-| `K` N11 分支器：写入是否成功 | 分支器 | W | 不产生业务变量；按条件输出连线 | F（否）、O（是） |
-| `F` N12 消息：写入失败但返回草稿 | 消息 | K | 不新增业务变量；回答内容引用上游变量 | Z |
-| `O` N13 消息：返回复盘与下次入口 | 消息 | K | 不新增业务变量；回答内容引用上游变量 | Z |
-<!-- GENERATED-NODE-LEDGER:END -->
-
-> 本节必须与[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)一起使用。先按流程图编号拖入节点并连线，再配置节点；未连线时下游“引用”下拉框会显示暂无数据。
-
-### 本工作流所有节点的页面填写顺序
-
-1. **开始**：按下方开始输入表逐行“+ 添加”，变量名、类型和必填状态照表填写。
-2. **自定义 SQL 数据库**：输入参数选择引用；读取结果只使用固定输出 `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>`。
-3. **表单新增/更新数据库**：选择 `university / 目标表`；新增在“设置新增数据”逐字段添加，更新先在“设置数据范围”配置 AND 条件，再在“设置更新数据”逐字段添加；固定输出仍为 `isSuccess/message/outputList`。
-4. **大模型**：输入参数名与 `{{变量名}}` 完全一致；系统提示词放角色、规则和 JSON 结构，用户提示词只放本轮变量；输出 `output:String`。
-5. **变量提取器**：输入固定为 `input｜引用｜上游大模型/output`；每个输出必须填写变量名、类型和提取描述，复杂 JSON 先用 String。
-6. **代码**：仅使用 Python `def main(...): return {...}`；输入名与形参一致，输出区声明每个返回键及类型。
-7. **分支器**：左侧选上游变量，条件选“等于”等操作；与字面量比较时比较类型选常量/固定值；每条分支和默认分支都必须连接。
-8. **消息**：输入区引用需要展示的变量，在“回答内容”用 `{{变量名}}`；流式输出关闭；消息后连接共享结束。
-9. **结束**：回答模式选“返回设定格式配置的回答”，输出设置 `output｜引用｜上游最终结果`。所有成功、失败、待补充消息都进入同一个结束节点。
-
-本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
-
-创建 `session_recaps`，上传 [DB-11-session-recaps.xlsx](../database/import-templates/DB-11-session-recaps.xlsx)。
-
-| 输入 | 来源 | 示例 |
-|---|---|---|
-| `AGENT_USER_INPUT` | 开始节点 | `先到这里，总结一下` |
-| `uid` | 主 Agent | `test_user_001` |
-| `session_id` | 主 Agent/会话上下文 | `SESSION-TEST-001` |
-| `context_json` | 总流程汇总状态 | 本会话已确认结果、写入结果、会话前摘要 |
-| `workflow_result_json` | 刚完成的业务 WF | 统一结果包装 |
-
-读取最近复盘：
-
-```sql
-SELECT * FROM session_recaps
-WHERE uid='{{uid}}'
-ORDER BY create_time DESC LIMIT 1;
+硬规则：
+- new_facts 只能来自用户明确陈述，不得把模型推断当事实。
+- state_changes 只能来自 successful_writes_json；草稿、pending、失败写入和消息展示都不是已完成状态变化。
+- open_questions 保留尚未解决的问题，不替用户作答。
+- 不保存敏感原话全文，只保存完成续接所需摘要。
+- 只输出 JSON：
+{"user_recap":{},"agent_recap":{},"new_facts":[],"state_changes":[],"open_questions":[],"next_entry":"","reply":""}
 ```
 
-`outputList=[]` 表示首次复盘，可使用空历史继续。过滤代码只保留成功写入的新事实和状态变化；普通闲聊、Agent 推断、`write_failed` 项不得写入。
+用户提示词：
 
-保存节点选择 `session_recaps` 表单新增，字段为 `session_id,user_recap_json,agent_recap_json,new_facts_json,state_changes_json,open_questions_json,next_entry,recap_version,updated_at`。写入后按 `uid + session_id` 回读验证。
+```text
+本次会话：{{conversation_text}}
+已确认成功写入：{{successful_writes_json}}
+本会话已有复盘：{{previous_recap_json}}
+请按规则生成新版本复盘。
+```
 
-| 节点 | 输入 | 输出 |
+输出 `output:String`。
+
+## 6. N06 变量提取器：提取复盘字段
+
+输入 `input=N05/output`。输出：
+
+| 变量 | 类型 | 描述 |
 |---|---|---|
-| 读取最近复盘 | uid | `isSuccess,message,outputList` |
-| 变化过滤 | 当前业务结果、最近复盘 | 允许保存的增量 |
-| 复盘大模型 | 过滤结果、未决事项 | 用户/Agent recap JSON |
-| 保存/回读 | uid、session_id、校验 JSON | `isSuccess,outputList` |
-| 结束 | `result_json` | `output` |
+| `user_recap_json` | String | 完整 user_recap JSON 字符串 |
+| `agent_recap_json` | String | 完整 agent_recap JSON 字符串 |
+| `new_facts` | Array | 用户明确新增事实数组 |
+| `new_facts_json` | String | new_facts 序列化 JSON 字符串 |
+| `state_changes` | Array | 仅成功写入状态变化数组 |
+| `state_changes_json` | String | state_changes 序列化 JSON 字符串 |
+| `open_questions` | Array | 未决问题数组 |
+| `open_questions_json` | String | open_questions 序列化 JSON 字符串 |
+| `next_entry` | String | 下次建议进入的工作流或问题 |
+| `reply` | String | 给用户的复盘开场和下一步 |
 
-调试正常结束、首次空历史、上游 `write_failed`、纯闲聊、数据库失败、下一次会话读取最近复盘。只有回读成功才能说“复盘已保存”。
+## 7. N07/N08：校验并准备数据库行
+
+N07 输入 uid/session_id/request_time=N00，对话和 successful_writes=N03，version=N03/next_recap_version，其他引用 N06：
+
+```python
+def main(uid, session_id, request_time, conversation_text, successful_writes_json, next_recap_version, user_recap_json, agent_recap_json, new_facts, new_facts_json, state_changes, state_changes_json, open_questions, open_questions_json, next_entry, reply):
+    errors = []
+    user_text = str(user_recap_json).strip()
+    agent_text = str(agent_recap_json).strip()
+    if not user_text.startswith("{") or not user_text.endswith("}"): errors.append("user_recap_json 无效")
+    if not agent_text.startswith("{") or not agent_text.endswith("}"): errors.append("agent_recap_json 无效")
+    if not isinstance(new_facts, list): errors.append("new_facts 不是数组")
+    if not isinstance(state_changes, list): errors.append("state_changes 不是数组")
+    if not isinstance(open_questions, list): errors.append("open_questions 不是数组")
+    if not str(next_entry).strip(): errors.append("缺少 next_entry")
+    writes_text = str(successful_writes_json).strip()
+    if writes_text in ["", "{}", "[]"] and isinstance(state_changes, list) and len(state_changes) > 0:
+        errors.append("没有成功写入却生成了 state_changes")
+    try: version_value = int(next_recap_version)
+    except: version_value = 1
+    return {
+        "recap_valid": len(errors) == 0,
+        "recap_error": ";".join(errors),
+        "session_id": str(session_id),
+        "user_recap_json": user_text,
+        "agent_recap_json": agent_text,
+        "new_facts_json": str(new_facts_json),
+        "state_changes_json": str(state_changes_json),
+        "open_questions_json": str(open_questions_json),
+        "next_entry": str(next_entry),
+        "recap_version": version_value,
+        "updated_at": str(request_time),
+        "reply": str(reply),
+    }
+```
+
+输出区声明 `recap_valid:Boolean`、`recap_version:Integer`，以及 `recap_error/session_id/user_recap_json/agent_recap_json/new_facts_json/state_changes_json/open_questions_json/next_entry/updated_at/reply:String`。N08：`recap_valid == true`；是 → N09，否 → N20。
+
+## 8. N09/N10：新增复盘
+
+N09 表单处理数据 → `university/session_recaps` → 新增数据。逐项映射 N07 的 `session_id/user_recap_json/agent_recap_json/new_facts_json/state_changes_json/open_questions_json/next_entry/recap_version/updated_at`；页面强制 uid 时引用 N00/uid。
+
+N10：`N09/isSuccess == true`；是 → N11，否 → N17。
+
+## 9. N11～N16：回读确认
+
+N11 自定义 SQL，输入 uid、session_id、recap_version=N07/recap_version：
+
+```sql
+SELECT user_recap_json, agent_recap_json, new_facts_json,
+       state_changes_json, open_questions_json, next_entry,
+       recap_version, updated_at
+FROM session_recaps
+WHERE uid='{{uid}}' AND session_id='{{session_id}}'
+  AND recap_version={{recap_version}}
+ORDER BY updated_at DESC LIMIT 1;
+```
+
+Integer `recap_version` 在 SQL 中不要加单引号。N12：`N11/isSuccess == true`；是 → N13，否 → N18。
+
+N13 输入 expected_user=N07/user_recap_json、expected_agent=N07/agent_recap_json、outputList=N11/outputList：
+
+```python
+def main(expected_user, expected_agent, outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    stored_user = str(row.get("user_recap_json", ""))
+    stored_agent = str(row.get("agent_recap_json", ""))
+    same = len(stored_user.strip()) > 2 and stored_user.strip() == str(expected_user).strip() and stored_agent.strip() == str(expected_agent).strip()
+    return {"readback_matches": same, "stored_user_recap_json": stored_user, "stored_agent_recap_json": stored_agent}
+```
+
+输出 `readback_matches:Boolean`、`stored_user_recap_json:String`、`stored_agent_recap_json:String`。N14：true → N16，false → N18。
+
+N16 输入 `reply=N07/reply`、`recap=N13/stored_user_recap_json`、`next_entry=N07/next_entry`，回答：
+
+```text
+{{reply}}
+
+本次会话复盘：
+{{recap}}
+
+下次建议入口：{{next_entry}}
+```
+
+## 10. 错误消息和 N22 结束
+
+| 节点 | 回答内容 |
+|---|---|
+| N17 | 引用 N09/message：复盘已生成但没有保存，不声称已记录 |
+| N18 | 引用 N11/message：写入后无法回读一致，不能确认保存 |
+| N19 | 引用 N03/input_error：缺少必要会话内容 |
+| N20 | 引用 N07/recap_error：模型复盘结构或事实边界无效，未保存 |
+| N21 | 引用 N01/message：历史复盘读取失败，本轮停止 |
+
+所有消息关闭流式输出并连接 N22。N22：回答模式“返回设定格式配置的回答”；输出 `output｜输入｜workflow_finished`；回答内容“本轮处理已结束，请以上方消息节点的提示为准。”。
+
+## 11. 调试指南
+
+1. 正常会话：DB-11 新增 version=1，回读后展示 user_recap。
+2. 同 session 再生成：version 应递增，不覆盖旧记录。
+3. 空 successful_writes：state_changes 必须为空；否则 N07 拦截。
+4. 草稿未确认：只能出现在 open_questions/next_entry，不能进入 state_changes。
+5. conversation_text 太短：到 N19，不调用模型。
+6. 写入失败/回读不一致：到 N17/N18，不说已保存。
+
+## 12. 验收清单
+
+- [ ] 开始节点明确传入 conversation_text 和 successful_writes_json。
+- [ ] 用户复盘与 Agent 续接复盘分开。
+- [ ] new_facts 只来自明确陈述，state_changes 只来自成功写入。
+- [ ] 版本递增、写入后回读一致才展示保存成功。
+- [ ] 所有代码无 import，输出声明完整；所有分支连接 N22。

@@ -1,356 +1,339 @@
-# WF-10 决策分析与七天试错搭建指南
+# WF-10 决策分析与七天试错：逐节点搭建指南
 
-## 1. 目标与准备
+> 本工作流有五种操作：即时分析、创建七天试错、确认启动、每日记录、第七天复盘，另有停止和安全出口。每个模式单独成图，避免旧版总图交叉。七天试错是低风险实验，不得替代医疗、法律或财务专业意见。
 
-对即时选择做机会成本分析，或创建、记录、复盘七天试错，产出 `decision_trial_json`。输入为 `AGENT_USER_INPUT`、`uid`、`session_id`、可选 `context_json`、`confirm_action`、`confirmation_token`；存储实体为 `decision_trials`。token 由主 Agent 或平台生成，不由大模型编造。七天试错用于获得行为证据，不承诺七天完成大型成果。
+## 1. 数据表与开始输入
 
-## 2. 最小可运行版
+在 `university` 上传 [DB-09 decision_trials](../database/import-templates/DB-09-decision-trials.xlsx)，保留 `id/uid/create_time`。
 
-```text
-开始 → 大模型（生成决策分析或试错草稿）→ 结束
-```
+N00 开始输入：
 
-拖入“大模型”并重命名，连接开始和结束。提示词使用下方提示词 A；结束输出模型文本。此版不读取历史、不保存，状态为 `draft`。
+| 变量 | 类型 | 必填 | 调试值 |
+|---|---|---:|---|
+| `AGENT_USER_INPUT` | String | 是 | `我该选实验室项目还是实习？` |
+| `uid` | String | 是 | `test_user_001` |
+| `trial_id` | String | 否 | 每日记录/复盘/停止时填写 |
+| `confirmation_token` | String | 否 | 确认启动时填写 |
+| `request_time` | String | 是 | `2026-07-19 20:00:00` |
 
-## 3. 完整业务版画布、节点清单与逐步连线
-
-以下四张图复用同一个 N00～N06 入口和 N05 结束节点，画布中只拖一次。
-
-### 3.1 即时分析与创建计划
-
-![WF-10 即时分析与创建计划](images/WF-10-analysis-create.png)
+## 2. 入口路由
 
 ```mermaid
-flowchart TD
-  S[N00 开始] --> I[N01 大模型：识别意图] --> X[N02 变量提取器：提取意图与风险] --> HR{N03 分支器：是否高风险}
-  HR -- 是 --> HS[N04 消息：停止常规建议并提示专业求助] --> Z[N05 结束]
-  HR -- 否 --> CM{N06 分支器：是否为确认轮}
-  CM -- 非确认轮 --> B{N17 分支器：选择模式}
-  B -- 即时分析 --> A[N18 大模型：生成决策分析] --> A1[N19 消息：展示分析] --> Z
-  B -- 创建试错 --> P[N20 大模型：生成七天计划] --> PX[N21 变量提取器：提取七天计划]
-  PX --> PV[N22 代码：校验七天计划] --> PD{N23 分支器：计划是否有效}
-  PD -- 否 --> PF[N24 消息：计划解析失败] --> Z
-  PD -- 是 --> PPW[N25 数据库：保存 pending_trial_plan] --> PW{N49 分支器：pending 写入成功?}
-  PW -- 否 --> F1[N27 消息：创建写入失败] --> Z
-  PW -- 是 --> C0[N26 消息：展示计划与 confirmation_token] --> Z
+flowchart LR
+    N00["N00 开始"] --> N01["N01 变量提取器：识别模式和安全风险"]
+    N01 --> N02{"N02 分支器：高风险请求？"}
+    N02 -->|是| N63["N63 消息：停止并寻求帮助"]
+    N02 -->|否| N03{"N03 分支器：trial_action"}
+    N03 -->|analysis| N04["N04 大模型：即时决策分析"]
+    N03 -->|create_trial| N11["N11 大模型：生成七天计划"]
+    N03 -->|confirm_trial| N20["N20 数据库：读取 pending 计划"]
+    N03 -->|daily_log| N30["N30 数据库：读取 active 计划"]
+    N03 -->|day7_review| N44["N44 数据库：读取计划和日志"]
+    N03 -->|stop| N59["N59 数据库：停止试错"]
+    N03 -->|unknown| N64["N64 消息：说明支持模式"]
+    N63 --> N65["N65 公共结束"]
+    N64 --> N65
 ```
 
-### 3.2 确认并创建试错
+N01 输入 `user_input=N00/AGENT_USER_INPUT`、`trial_id=N00/trial_id`，输出：
 
-![WF-10 确认并创建试错](images/WF-10-confirm-plan.png)
-
-```mermaid
-flowchart TD
-  S[N00 开始] --> I[N01 大模型：识别意图] --> X[N02 变量提取器：提取意图与风险] --> HR{N03 分支器：是否高风险}
-  HR -- 是 --> HS[N04 消息：安全出口] --> Z[N05 结束]
-  HR -- 否 --> CM{N06 分支器：是否为确认轮}
-  CM -- 确认计划 --> PPR[N07 数据库：读取 pending_trial_plan] --> PTC{N08 分支器：token 与动作匹配?}
-  PTC -- 否 --> PCI[N09 消息：计划确认无效或过期] --> Z
-  PTC -- 是 --> W1[N10 数据库：写入试错状态] --> K1{N11 分支器：写入成功?}
-  K1 -- 否 --> F1[N27 消息：创建写入失败] --> Z
-  K1 -- 是 --> O1[N28 消息：试错已创建] --> Z
-```
-
-### 3.3 每日记录
-
-![WF-10 每日记录](images/WF-10-daily-log.png)
-
-```mermaid
-flowchart TD
-  S[N00 开始] --> I[N01 大模型：识别意图] --> X[N02 变量提取器：提取意图与风险] --> HR{N03 分支器：是否高风险}
-  HR -- 是 --> HS[N04 消息：安全出口] --> Z[N05 结束]
-  HR -- 否 --> B{N17 分支器：选择模式}
-  B -- 每日记录 --> R1[N29 数据库：读取试错状态] --> L[N30 大模型：整理每日记录]
-  L --> LX[N31 变量提取器：提取每日记录] --> LV[N32 代码：校验每日记录] --> LD{N33 分支器：记录有效?}
-  LD -- 否 --> LF[N34 消息：记录解析失败] --> Z
-  LD -- 是 --> W2[N35 数据库：写入每日记录] --> K2{N36 分支器：写入成功?}
-  K2 -- 否 --> F2[N37 消息：每日记录写入失败] --> Z
-  K2 -- 是 --> O2[N38 消息：每日记录成功] --> Z
-```
-
-### 3.4 第七天复盘与确认
-
-![WF-10 第七天复盘与确认](images/WF-10-day7-review.png)
-
-```mermaid
-flowchart TD
-  S[N00 开始] --> I[N01 大模型：识别意图] --> X[N02 变量提取器：提取意图与风险] --> HR{N03 分支器：是否高风险}
-  HR -- 是 --> HS[N04 消息：安全出口] --> Z[N05 结束]
-  HR -- 否 --> CM{N06 分支器：是否为确认轮}
-  CM -- 非确认轮 --> B{N17 分支器：选择模式}
-  B -- 第七天复盘 --> R2[N39 数据库：读取七日记录] --> D[N40 大模型：生成第七天复盘]
-  D --> DX[N41 变量提取器：提取第七天复盘] --> DV[N42 代码：校验第七天复盘] --> DD{N43 分支器：复盘有效?}
-  DD -- 否 --> DF[N44 消息：复盘解析失败] --> Z
-  DD -- 是 --> RPW[N45 数据库：保存 pending_day7_review] --> RP{N50 分支器：pending 写入成功?}
-  RP -- 否 --> F3[N47 消息：复盘写入失败] --> Z
-  RP -- 是 --> C3[N46 消息：展示复盘与 confirmation_token] --> Z
-  CM -- 确认复盘 --> RPR[N12 数据库：读取 pending_day7_review] --> RTC{N13 分支器：token 与动作匹配?}
-  RTC -- 否 --> RCI[N14 消息：复盘确认无效或过期] --> Z
-  RTC -- 是 --> W3[N15 数据库：更新试错状态] --> K3{N16 分支器：写入成功?}
-  K3 -- 否 --> F3
-  K3 -- 是 --> O3[N48 消息：复盘已保存] --> Z
-```
-
-```text
-开始 → 大模型（识别决策意图）→ 变量提取器（提取意图与风险）→ 分支器（是否高风险）
-├─ 是 → 消息（停止常规建议并提示专业求助）→ 结束
-└─ 否 → 分支器（是否为 pending 确认轮）
-   ├─ 确认计划 → 数据库（读取 pending_trial_plan）→ 分支器（token 与动作是否匹配）
-   │  ├─ 否 → 消息（计划确认无效或已过期）→ 结束
-   │  └─ 是 → 数据库（写入试错状态）→ 分支器（写入是否成功）→ 消息 → 结束
-   ├─ 确认复盘 → 数据库（读取 pending_day7_review）→ 分支器（token 与动作是否匹配）
-   │  ├─ 否 → 消息（复盘确认无效或已过期）→ 结束
-   │  └─ 是 → 数据库（更新试错状态）→ 分支器（写入是否成功）→ 消息 → 结束
-   └─ 非确认轮 → 分支器（选择模式）
-├─ 即时分析 → 大模型（生成决策分析）→ 消息（展示分析）→ 结束
-├─ 创建试错 → 大模型（生成七天计划）→ 变量提取器（提取七天计划）→ 代码（校验七天计划）→ 分支器（计划是否有效）→ 数据库（保存 pending_trial_plan）→ 消息（展示 token）→ 结束
-├─ 每日记录 → 数据库（读取试错状态）→ 大模型（整理每日记录）→ 变量提取器（提取每日记录）→ 代码（校验每日记录）→ 分支器（记录是否有效）→ 数据库（写入每日记录）→ 分支器（写入是否成功）→ 消息 → 结束
-└─ 第七天复盘 → 数据库（读取七日记录）→ 大模型（生成第七天复盘）→ 变量提取器（提取第七天复盘）→ 代码（校验第七天复盘）→ 分支器（复盘是否有效）→ 数据库（保存 pending_day7_review）→ 消息（展示 token）→ 结束
-```
-
-拖入 5 个“大模型”、4 个“变量提取器”、3 个“代码”、9 个“数据库”、13 个“分支器”、15 个“消息”和各 1 个“开始/结束”。按图从左到右放置、重命名、连线。两个确认轮从前置分支器分流，不重新运行计划或复盘生成节点。
-
-## 4. 实际配置与变量映射
-
-| 节点 | 关键配置 | 输出 |
+| 变量 | 类型 | 描述 |
 |---|---|---|
-| 识别决策意图 | 提示词 A，只输出 JSON | `intent_json` |
-| 提取意图与风险 | 提取 `mode`,`trial_id`,`day`,`high_risk`,`risk_reason` | 同名变量 |
-| 是否高风险 | `high_risk=true` 时进入专业求助安全出口 | 分支 |
-| 是否为 pending 确认轮 | 按 `confirm_action` 路由确认计划、确认复盘或新请求 | 分支 |
-| 读取 pending_trial_plan | `uid + confirmation_token` | `pending_trial_plan` |
-| 计划 token 与动作是否匹配 | 动作为 `confirm_trial_plan` 且用户/token/pending 匹配 | `confirmation_ok` |
-| 读取 pending_day7_review | `uid + confirmation_token` | `pending_day7_review` |
-| 复盘 token 与动作是否匹配 | 动作为 `confirm_day7_review` 且用户/token/pending 匹配 | `confirmation_ok` |
-| 选择模式 | `mode` 分为 `decision_analysis/create_trial/daily_log/day7_review` | 分支 |
-| 生成决策分析 | 提示词 B | `decision_analysis_json` |
-| 生成七天计划 | 提示词 C | `trial_plan_json` |
-| 提取/校验七天计划 | 检查假设、投入上限、最小行动和 7 日安排 | `plan_valid`,`validated_trial_plan_json` |
-| 保存 pending_trial_plan | 只保存 `validated_trial_plan_json`、用户、token 和 `awaiting_confirmation` | `pending_trial_plan` |
-| 保存 pending_day7_review | 只保存 `validated_review_json`、用户、token 和 `awaiting_confirmation` | `pending_day7_review` |
-| 读取试错状态 | `uid + trial_id` | `trial_state_json` |
-| 整理每日记录 | 提取精力、兴趣、完成度、困难、说明 | `daily_log_json` |
-| 提取/校验每日记录 | 检查 `trial_id`、日期 1～7 和量表范围 | `log_valid`,`validated_daily_log_json` |
-| 生成/提取/校验第七天复盘 | 检查证据、理由和决定枚举 | `review_valid`,`validated_review_json` |
-| 写入节点 | 保留 `record_version`；不得覆盖其他用户 | `write_result` |
-| 写入是否成功 | 检查成功标志；否则回读版本 | `write_ok` |
+| `trial_action` | String | analysis/create_trial/confirm_trial/daily_log/day7_review/stop/unknown |
+| `safety_risk` | Boolean | 自伤、伤人、违法、极端健康风险或要求替代专业诊疗时为 true |
+| `decision_topic` | String | 决策主题 |
+| `day_number` | Integer | 每日记录的第几天；无法判断为 0 |
+| `action_reason` | String | 分类依据 |
 
-核心结构：
+N02 判断 `safety_risk == true`；N03 为 trial_action 添加七条固定值分支。
 
-```json
-{"mode":"create_trial","decision_question":"","analysis":{},"trial":{"trial_id":"","hypothesis":"","investment_cap":{"time_minutes_per_day":30,"money":0},"daily_minimum_action":"","status":"planned","daily_logs":[],"day7_review":{"evidence":[],"decision":"continue","reason":"","next_adjustment":""}}}
+## 3. 即时分析 N04～N10
+
+```mermaid
+flowchart LR
+    N04["N04 大模型：即时决策分析"] --> N05["N05 变量提取器：提取分析"]
+    N05 --> N06["N06 代码：准备 analysis 行"] --> N07["N07 数据库：新增分析"]
+    N07 --> N08{"N08 分支器：保存成功？"}
+    N08 -->|是| N09["N09 消息：展示分析"]
+    N08 -->|否| N10["N10 消息：分析未保存"]
+    N09 --> N65["N65 公共结束"]
+    N10 --> N65
 ```
 
-## 5. 可复制完整提示词
-
-### 提示词 A：意图识别
+N04 模型 `Spark4.0 Ultra`，关闭历史。输入 `user_input=N00/AGENT_USER_INPUT`、`topic=N01/decision_topic`。系统提示词：
 
 ```text
-识别用户要做的模式，只输出合法 JSON：{"mode":"decision_analysis|create_trial|daily_log|day7_review","trial_id":"","day":null,"high_risk":false,"risk_reason":""}。若请求涉及自伤、严重身心症状、违法操作或可能造成重大人身/财务损害的具体执行，high_risk=true 并简述原因，不提供执行步骤。其余按最接近模式分类，缺失字段留空。
-用户输入：{{AGENT_USER_INPUT}}
+你是低风险大学决策教练。用目标、选项、约束、可逆性、最坏情况、机会成本、信息缺口和下一步小实验分析，不替用户决定，不给成功概率。只输出 JSON：
+{"topic":"","options":[],"constraints":[],"tradeoffs":[],"reversibility":"","worst_case":"","missing_information":[],"next_small_step":"","reply":""}
 ```
 
-### 提示词 B：即时决策分析
-
-```text
-你是决策辅助教练，不替用户决定。围绕问题输出 JSON，必须包含 options，以及每个选项的 benefits、risks、time_cost、economic_cost、opportunity_cost、reversibility、worst_case、exit_conditions；再给 assumptions、missing_information、suggested_small_test。不得输出伪精确成功率。政策及时效信息提示通过官方渠道复核。
-问题：{{AGENT_USER_INPUT}}
-上下文：{{context_json}}
-```
-
-### 提示词 C：七天试错计划
-
-```text
-为用户生成七天低成本试错计划，只输出合法 JSON。包含 hypothesis、investment_cap（每日时间和总金钱上限）、daily_minimum_action、day1_to_day7、daily_metrics（energy 1-5、interest 1-5、completion 0-100、difficulty）、stop_conditions、day7_questions。每天最小行动应可在投入上限内完成；目标是收集证据，不是完成大型成果。status=planned。未知条件列入 missing_information，不虚构。
-用户目标：{{AGENT_USER_INPUT}}
-```
-
-每日整理提示词：
-
-```text
-仅从用户原话提取本日记录：trial_id、day、action_done、energy、interest、completion、difficulty、note。未知为 null。中断不是失败，可记录 rest 或 skipped_with_reason。输出合法 JSON，不作道德评价。
-```
-
-第七天复盘提示词：
-
-```text
-根据七日记录区分事实与推断，汇总完成情况、精力/兴趣趋势、主要困难和反证。给出 continue、adjust、stop 三者之一作为建议，并说明依据、局限和下一步；决定权属于用户。无足够记录时返回 insufficient_evidence，不假装完成第七天复盘。
-```
-
-三个“代码”节点分别解析对应 JSON：计划必须含 `hypothesis`、`investment_cap`、`daily_minimum_action` 且 `day1_to_day7` 恰为 7 项；每日记录必须含 `trial_id`，`day` 为 1～7，量表在提示词范围；复盘的 `decision` 只能为 `continue/adjust/stop` 且必须有 `reason`。解析异常或字段不合格返回对应 `*_valid=false`，进入“计划/记录/复盘解析失败”消息并结束，绝不连接写入节点。代码节点只使用平台已确认支持的 Python，并按下方 `main(...)` 返回字典配置输出。
-
-N22 输入 `trial_plan_json`；输出 `plan_valid:Boolean`、`plan_error:String`、`validated_trial_plan_json:Object`：
+N05 输出 `decision_json:String`、`reply:String`。N06 输入 uid/request_time/decision_json/reply：
 
 ```python
-import json
-
-def main(trial_plan_json):
-    try:
-        value = json.loads(trial_plan_json) if isinstance(trial_plan_json, str) else (trial_plan_json or {})
-        valid = all(value.get(key) not in (None, "", []) for key in ("hypothesis", "investment_cap", "daily_minimum_action")) and len(value.get("day1_to_day7", [])) == 7
-        return {"plan_valid": valid, "plan_error": "" if valid else "计划缺字段或日程不是 7 项", "validated_trial_plan_json": value if valid else {}}
-    except Exception as exc:
-        return {"plan_valid": False, "plan_error": str(exc), "validated_trial_plan_json": {}}
+def main(uid, request_time, decision_json, reply):
+    return {
+        "trial_id": str(uid) + "-DECISION-" + str(request_time), "record_type": "analysis",
+        "decision_json": str(decision_json), "trial_plan_json": "{}", "pending_json": "{}",
+        "confirmation_token": "", "day_number": 0, "daily_log_json": "{}", "review_json": "{}",
+        "trial_status": "completed", "updated_at": str(request_time), "reply": str(reply)
+    }
 ```
 
-N32 输入 `daily_log_json`；输出 `log_valid:Boolean`、`log_error:String`、`validated_daily_log_json:Object`：
+输出 `day_number:Integer`，以及 `trial_id/record_type/decision_json/trial_plan_json/pending_json/confirmation_token/daily_log_json/review_json/trial_status/updated_at/reply:String`。N07 表单新增 DB-09，逐项映射 N06 所有表字段；页面强制 uid 时引用 N00/uid。N08 判断 isSuccess。N09 展示 reply；N10 展示 decision_json 并说明未保存及 N07/message。
+
+## 4. 创建七天试错 N11～N19
+
+```mermaid
+flowchart LR
+    N11["N11 大模型：生成七天计划"] --> N12["N12 变量提取器：提取计划"]
+    N12 --> N13["N13 代码：校验并准备 pending 行"] --> N14{"N14 分支器：计划有效？"}
+    N14 -->|否| N19["N19 消息：计划无效"]
+    N14 -->|是| N15["N15 数据库：新增 pending 计划"] --> N16{"N16 分支器：保存成功？"}
+    N16 -->|是| N17["N17 消息：展示计划和 token"]
+    N16 -->|否| N18["N18 消息：计划未保存"]
+    N17 --> N65["N65 公共结束"]
+    N18 --> N65
+    N19 --> N65
+```
+
+N11 输入 user_input/topic。系统提示词要求：每天 10～60 分钟、只收集验证决策所需证据、包含退出条件、安全边界和第七天复盘标准；只输出 `{"trial_plan":{},"reply":""}`。
+
+N12 输出 `trial_plan_json:String`、`days:Array`、`success_evidence:Array`、`stop_conditions:Array`、`reply:String`。
+
+N13 输入 uid/request_time 和 N12 输出：
 
 ```python
-import json
-
-def main(daily_log_json):
-    try:
-        value = json.loads(daily_log_json) if isinstance(daily_log_json, str) else (daily_log_json or {})
-        day = value.get("day")
-        energy, interest, completion = value.get("energy"), value.get("interest"), value.get("completion")
-        valid = bool(value.get("trial_id")) and isinstance(day, int) and 1 <= day <= 7 and (energy is None or 1 <= energy <= 5) and (interest is None or 1 <= interest <= 5) and (completion is None or 0 <= completion <= 100)
-        return {"log_valid": valid, "log_error": "" if valid else "trial_id、day 或量表范围无效", "validated_daily_log_json": value if valid else {}}
-    except Exception as exc:
-        return {"log_valid": False, "log_error": str(exc), "validated_daily_log_json": {}}
+def main(uid, request_time, trial_plan_json, days, success_evidence, stop_conditions, reply):
+    errors = []
+    if not str(trial_plan_json).strip().startswith("{"): errors.append("计划 JSON 无效")
+    if not isinstance(days, list) or len(days) != 7: errors.append("必须恰好 7 天")
+    if not isinstance(success_evidence, list) or len(success_evidence) == 0: errors.append("缺少验证证据")
+    if not isinstance(stop_conditions, list) or len(stop_conditions) == 0: errors.append("缺少停止条件")
+    token = str(uid) + "-TRIAL-" + str(request_time)
+    return {
+        "plan_valid": len(errors) == 0, "plan_error": ";".join(errors),
+        "trial_id": str(uid) + "-TRIAL-" + str(request_time), "record_type": "plan",
+        "decision_json": "{}", "trial_plan_json": "{}", "pending_json": str(trial_plan_json),
+        "confirmation_token": token, "day_number": 0, "daily_log_json": "{}", "review_json": "{}",
+        "trial_status": "pending", "updated_at": str(request_time), "reply": str(reply)
+    }
 ```
 
-N42 输入 `day7_review_json`；输出 `review_valid:Boolean`、`review_error:String`、`validated_review_json:Object`：
+输出 `plan_valid:Boolean`、`day_number:Integer`，以及 `plan_error/trial_id/record_type/decision_json/trial_plan_json/pending_json/confirmation_token/daily_log_json/review_json/trial_status/updated_at/reply:String`。N14 判断 plan_valid。N15 表单新增 DB-09 全字段。N16 判断 isSuccess。N17 展示 pending_json、trial_id、token，要求明确回复“确认启动七天试错”；N18/N19 分别展示数据库 message/plan_error。
 
-```python
-import json
+## 5. 确认启动 N20～N29
 
-def main(day7_review_json):
-    try:
-        value = json.loads(day7_review_json) if isinstance(day7_review_json, str) else (day7_review_json or {})
-        valid = value.get("decision") in ("continue", "adjust", "stop") and bool(value.get("reason"))
-        return {"review_valid": valid, "review_error": "" if valid else "decision 或 reason 无效", "validated_review_json": value if valid else {}}
-    except Exception as exc:
-        return {"review_valid": False, "review_error": str(exc), "validated_review_json": {}}
+```mermaid
+flowchart LR
+    N20["N20 数据库：读取 pending 计划"] --> N21{"N21 分支器：SQL 成功？"}
+    N21 -->|否| N29["N29 消息：pending 读取失败"]
+    N21 -->|是| N22["N22 代码：整理并校验 token"] --> N23{"N23 分支器：确认有效？"}
+    N23 -->|否| N28["N28 消息：确认无效"]
+    N23 -->|是| N24["N24 数据库：激活计划"] --> N25{"N25 分支器：激活成功？"}
+    N25 -->|是| N26["N26 消息：试错已启动"]
+    N25 -->|否| N27["N27 消息：激活失败"]
+    N26 --> N65["N65 公共结束"]
+    N27 --> N65
+    N28 --> N65
+    N29 --> N65
 ```
 
-## 6. 确认、安全出口与失败处理
-
-创建计划首轮只保存 `pending_trial_plan`，返回 `status=awaiting_confirmation`、`next_action=confirm_trial_plan` 和 `confirmation_token`；第七天复盘首轮只保存 `pending_day7_review`，返回 `next_action=confirm_day7_review` 和 token。下一轮必须携带对应 `confirm_action` 与 token，回读同一用户 pending 后写正式库，且不重新生成。token 不匹配、pending 过期或普通“好的”均结束且不写入。
-
-两个确认轮成功均返回 `result_json.status=write_succeeded`，`data.decision_trial_json` 直接取对应 pending 中的已校验 JSON，`next_action=none`；失败返回 `write_failed`。确认轮禁止把用户确认文字送入计划或复盘大模型。
-
-即时分析不必写入。创建试错和最终结论属于正式记录，必须按上述跨轮 pending 状态机确认。触发投入上限或停止条件时暂停计划，提示用户选择调整或停止。涉及医疗、心理、法律、财务高风险事项只提供一般信息并提示专业求助。写入失败统一返回 `write_failed`、`next_action=retry_trial_write`，不得声称已创建或已记录。
-
-## 7. 调试与验收清单
-
-成功用例：“我在考研和就业间犹豫，想先用七天体验数据分析，每天最多 30 分钟。”预期进入 `create_trial`，计划含假设、投入上限、每日最小行动；未确认不写入。第七天仅有 3 条记录时应标记证据不足。
-
-失败用例：缺 `uid` 后要求保存，预期只返回草稿；模拟写入失败，预期回复明确“未保存”。
-
-- [ ] 四种模式路由正确，产出 `decision_trial_json`。
-- [ ] 即时分析包含八个分支器维度，不替用户拍板。
-- [ ] 试错包含假设、投入上限、最小行动、每日指标和退出条件。
-- [ ] 创建与最终结论经过确认，失败不报成功。
-- [ ] 完成试错可把行为证据交给 WF-08，结果交给 WF-12。
-
-## 节点逐项配置
-
-<!-- GENERATED-NODE-LEDGER:START -->
-### 画布节点连线与页面输入输出总表
-
-本表由流程图生成，用于防止漏连。‘直接上游’决定页面引用下拉框中可选的数据来源；具体变量名以本文件后续业务映射表为准。
-开始节点类型规则：`uid/session_id/AGENT_USER_INPUT` 及所有 `*_json/*_token/*_id` 均选 String；计数、天数选 Integer；真伪开关选 Boolean。表中未特别标注的输入一律选 String，JSON 作为字符串传递。
-
-| 节点 | 类型 | 直接上游（输入来源） | 固定/声明输出 | 直接下游 |
-|---|---|---|---|---|
-| `S` N00 开始 | 开始 | 无（起点） | 开始节点中声明的同名变量 | I、I、I、I |
-| `I` N01 大模型：识别意图 | 大模型 | S、S、S、S | `output:String` | X、X、X、X |
-| `X` N02 变量提取器：提取意图与风险 | 变量提取器 | I、I、I、I | `mode:String`、`trial_id:String`、`day:Integer`、`high_risk:Boolean`、`risk_reason:String` | HR、HR、HR、HR |
-| `HR` N03 分支器：是否高风险 | 分支器 | X、X、X、X | 不产生业务变量；按条件输出连线 | HS（是）、CM（否）、HS（是）、CM（否）、HS（是）、B（否）、HS（是）、CM（否） |
-| `HS` N04 消息：安全出口 | 消息 | HR、HR、HR、HR | 不新增业务变量；回答内容引用上游变量 | Z、Z、Z、Z |
-| `Z` N05 结束 | 结束 | HS、A1、PF、F1、C0、HS、PCI、F1、O1、HS、LF、F2、O2、HS、DF、F3、C3、RCI、O3 | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
-| `CM` N06 分支器：是否为确认轮 | 分支器 | HR、HR、HR | 不产生业务变量；按条件输出连线 | B（非确认轮）、PPR（确认计划）、B（非确认轮）、RPR（确认复盘） |
-| `B` N17 分支器：选择模式 | 分支器 | CM、HR、CM | 不产生业务变量；按条件输出连线 | A（即时分析）、P（创建试错）、R1（每日记录）、R2（第七天复盘） |
-| `A` N18 大模型：生成决策分析 | 大模型 | B | `output:String` | A1 |
-| `A1` N19 消息：展示分析 | 消息 | A | 不新增业务变量；回答内容引用上游变量 | Z |
-| `P` N20 大模型：生成七天计划 | 大模型 | B | `output:String` | PX |
-| `PX` N21 变量提取器：提取七天计划 | 变量提取器 | P | `trial_plan_json:String`（完整七天计划 JSON） | PV |
-| `PV` N22 代码：校验七天计划 | 代码 | PX | 与 Python `main()` 返回 dict 的键完全一致 | PD |
-| `PD` N23 分支器：计划是否有效 | 分支器 | PV | 不产生业务变量；按条件输出连线 | PF（否）、PPW（是） |
-| `PF` N24 消息：计划解析失败 | 消息 | PD | 不新增业务变量；回答内容引用上游变量 | Z |
-| `PPW` N25 数据库：保存 pending_trial_plan | 数据库 | PD | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | PW |
-| `PW` N49 分支器：pending 写入成功? | 分支器 | PPW | 不产生业务变量；按条件输出连线 | F1（否）、C0（是） |
-| `F1` N27 消息：创建写入失败 | 消息 | PW、K1 | 不新增业务变量；回答内容引用上游变量 | Z、Z |
-| `C0` N26 消息：展示计划与 confirmation_token | 消息 | PW | 不新增业务变量；回答内容引用上游变量 | Z |
-| `PPR` N07 数据库：读取 pending_trial_plan | 数据库 | CM | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | PTC |
-| `PTC` N08 分支器：token 与动作匹配? | 分支器 | PPR | 不产生业务变量；按条件输出连线 | PCI（否）、W1（是） |
-| `PCI` N09 消息：计划确认无效或过期 | 消息 | PTC | 不新增业务变量；回答内容引用上游变量 | Z |
-| `W1` N10 数据库：写入试错状态 | 数据库 | PTC | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | K1 |
-| `K1` N11 分支器：写入成功? | 分支器 | W1 | 不产生业务变量；按条件输出连线 | F1（否）、O1（是） |
-| `O1` N28 消息：试错已创建 | 消息 | K1 | 不新增业务变量；回答内容引用上游变量 | Z |
-| `R1` N29 数据库：读取试错状态 | 数据库 | B | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | L |
-| `L` N30 大模型：整理每日记录 | 大模型 | R1 | `output:String` | LX |
-| `LX` N31 变量提取器：提取每日记录 | 变量提取器 | L | `daily_log_json:String`（单日记录 JSON） | LV |
-| `LV` N32 代码：校验每日记录 | 代码 | LX | 与 Python `main()` 返回 dict 的键完全一致 | LD |
-| `LD` N33 分支器：记录有效? | 分支器 | LV | 不产生业务变量；按条件输出连线 | LF（否）、W2（是） |
-| `LF` N34 消息：记录解析失败 | 消息 | LD | 不新增业务变量；回答内容引用上游变量 | Z |
-| `W2` N35 数据库：写入每日记录 | 数据库 | LD | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | K2 |
-| `K2` N36 分支器：写入成功? | 分支器 | W2 | 不产生业务变量；按条件输出连线 | F2（否）、O2（是） |
-| `F2` N37 消息：每日记录写入失败 | 消息 | K2 | 不新增业务变量；回答内容引用上游变量 | Z |
-| `O2` N38 消息：每日记录成功 | 消息 | K2 | 不新增业务变量；回答内容引用上游变量 | Z |
-| `R2` N39 数据库：读取七日记录 | 数据库 | B | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | D |
-| `D` N40 大模型：生成第七天复盘 | 大模型 | R2 | `output:String` | DX |
-| `DX` N41 变量提取器：提取第七天复盘 | 变量提取器 | D | `day7_review_json:String`（第七天复盘 JSON） | DV |
-| `DV` N42 代码：校验第七天复盘 | 代码 | DX | 与 Python `main()` 返回 dict 的键完全一致 | DD |
-| `DD` N43 分支器：复盘有效? | 分支器 | DV | 不产生业务变量；按条件输出连线 | DF（否）、RPW（是） |
-| `DF` N44 消息：复盘解析失败 | 消息 | DD | 不新增业务变量；回答内容引用上游变量 | Z |
-| `RPW` N45 数据库：保存 pending_day7_review | 数据库 | DD | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | RP |
-| `RP` N50 分支器：pending 写入成功? | 分支器 | RPW | 不产生业务变量；按条件输出连线 | F3（否）、C3（是） |
-| `F3` N47 消息：复盘写入失败 | 消息 | RP、K3 | 不新增业务变量；回答内容引用上游变量 | Z |
-| `C3` N46 消息：展示复盘与 confirmation_token | 消息 | RP | 不新增业务变量；回答内容引用上游变量 | Z |
-| `RPR` N12 数据库：读取 pending_day7_review | 数据库 | CM | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | RTC |
-| `RTC` N13 分支器：token 与动作匹配? | 分支器 | RPR | 不产生业务变量；按条件输出连线 | RCI（否）、W3（是） |
-| `RCI` N14 消息：复盘确认无效或过期 | 消息 | RTC | 不新增业务变量；回答内容引用上游变量 | Z |
-| `W3` N15 数据库：更新试错状态 | 数据库 | RTC | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | K3 |
-| `K3` N16 分支器：写入成功? | 分支器 | W3 | 不产生业务变量；按条件输出连线 | F3（否）、O3（是） |
-| `O3` N48 消息：复盘已保存 | 消息 | K3 | 不新增业务变量；回答内容引用上游变量 | Z |
-<!-- GENERATED-NODE-LEDGER:END -->
-
-> 本节必须与[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)一起使用。先按流程图编号拖入节点并连线，再配置节点；未连线时下游“引用”下拉框会显示暂无数据。
-
-### 本工作流所有节点的页面填写顺序
-
-1. **开始**：按下方开始输入表逐行“+ 添加”，变量名、类型和必填状态照表填写。
-2. **自定义 SQL 数据库**：输入参数选择引用；读取结果只使用固定输出 `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>`。
-3. **表单新增/更新数据库**：选择 `university / 目标表`；新增在“设置新增数据”逐字段添加，更新先在“设置数据范围”配置 AND 条件，再在“设置更新数据”逐字段添加；固定输出仍为 `isSuccess/message/outputList`。
-4. **大模型**：输入参数名与 `{{变量名}}` 完全一致；系统提示词放角色、规则和 JSON 结构，用户提示词只放本轮变量；输出 `output:String`。
-5. **变量提取器**：输入固定为 `input｜引用｜上游大模型/output`；每个输出必须填写变量名、类型和提取描述，复杂 JSON 先用 String。
-6. **代码**：仅使用 Python `def main(...): return {...}`；输入名与形参一致，输出区声明每个返回键及类型。
-7. **分支器**：左侧选上游变量，条件选“等于”等操作；与字面量比较时比较类型选常量/固定值；每条分支和默认分支都必须连接。
-8. **消息**：输入区引用需要展示的变量，在“回答内容”用 `{{变量名}}`；流式输出关闭；消息后连接共享结束。
-9. **结束**：回答模式选“返回设定格式配置的回答”，输出设置 `output｜引用｜上游最终结果`。所有成功、失败、待补充消息都进入同一个结束节点。
-
-本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
-
-创建 `decision_trials` 并上传 [DB-09-decision-trials.xlsx](../database/import-templates/DB-09-decision-trials.xlsx)。
-
-| 输入 | 来源 | 示例 |
-|---|---|---|
-| `AGENT_USER_INPUT` | 开始节点 | `我在纠结考研还是就业`、`创建七天试错`、`记录第2天`、`确认试错计划` |
-| `uid` | 主 Agent | `test_user_001` |
-| `session_id` | 主 Agent/会话上下文 | `SESSION-TEST-001` |
-| `context_json` | 上游工作流/共享状态 | 可选，相关画像、规划或任务摘要 |
-| `trial_id` | 创建结果/用户输入 | 例如 `TRIAL-001` |
-| `day_number` | 变量提取 | 1～7 |
-| `confirm_action` | 总流程/变量提取器 | `confirm_trial_plan/confirm_day7_review/none` |
-| `confirmation_token` | pending 结束输出 | 确认轮使用 |
-
-读取完整试错：
+N20 自定义 SQL，输入 uid 和 trial_id：
 
 ```sql
-SELECT * FROM decision_trials
-WHERE uid='{{uid}}' AND trial_id='{{trial_id}}'
-ORDER BY day_number ASC, create_time ASC;
+SELECT id, trial_id, pending_json, confirmation_token, trial_status
+FROM decision_trials
+WHERE uid='{{uid}}' AND trial_id='{{trial_id}}' AND record_type='plan' AND trial_status='pending'
+ORDER BY updated_at DESC LIMIT 1;
 ```
 
-创建计划和第七天复盘都先保存到 `pending_json`，`record_type` 分别使用 `plan`、`day7_review`，并保存 token；下一轮按 `uid + trial_id + confirmation_token` 读取后才写 `trial_plan_json` 或 `review_json`。每日记录新增 `record_type=daily_log,day_number,daily_log_json`。
+N21 判断 isSuccess。N22 输入 outputList、input_token=N00/confirmation_token：
 
-| 节点 | 输入 | 输出 |
-|---|---|---|
-| 意图与风险提取 | 用户输入 | `mode,high_risk,trial_id,day_number` |
-| 数据库读取 | `uid,trial_id` | `isSuccess,message,outputList` |
-| 模型/校验 | 状态和用户输入 | 各类 validated JSON |
-| pending/正式写入 | uid、业务键、JSON | `isSuccess` |
-| 结束 | `result_json` | `output` |
+```python
+def main(outputList, input_token):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    stored = str(row.get("confirmation_token", ""))
+    valid = len(row) > 0 and str(input_token) != "" and str(input_token) == stored
+    return {
+        "confirm_valid": valid, "confirm_error": "" if valid else "pending 不存在或 token 不匹配",
+        "record_id": int(row.get("id", 0)) if str(row.get("id", "0")).isdigit() else 0,
+        "trial_plan_json": str(row.get("pending_json", "{}"))
+    }
+```
 
-调试即时分析（可不写库）、创建 pending、错误 token、确认计划、记录第 2 天、第七天 pending/确认以及 high_risk 安全出口。写入失败不得输出“已创建/已保存”。
+输出 confirm_valid:Boolean、confirm_error:String、record_id:Integer、trial_plan_json:String。N23 判断 confirm_valid。N24 表单更新 DB-09，范围 `id=N22/record_id AND uid=N00/uid`；更新 `trial_plan_json=N22/trial_plan_json`、`pending_json={}`、`confirmation_token=空`、`trial_status=active`、`updated_at=N00/request_time`。N25 判断 isSuccess；N26 显示“已启动”和 trial_id；N27/N28/N29 显示对应错误。
+
+## 6. 每日记录 N30～N43
+
+```mermaid
+flowchart LR
+    N30["N30 数据库：读取 active 计划"] --> N31{"N31 分支器：SQL 成功？"}
+    N31 -->|否| N43["N43 消息：active 读取失败"]
+    N31 -->|是| N32["N32 代码：整理 active 计划"] --> N33{"N33 分支器：找到计划？"}
+    N33 -->|否| N42["N42 消息：没有 active 试错"]
+    N33 -->|是| N34["N34 大模型：提取每日记录"] --> N35["N35 变量提取器：提取日志"]
+    N35 --> N36["N36 代码：准备 daily_log 行"] --> N37{"N37 分支器：日志有效？"}
+    N37 -->|否| N42
+    N37 -->|是| N38["N38 数据库：新增日志"]
+    N38 --> N39{"N39 分支器：保存成功？"}
+    N39 -->|是| N40["N40 消息：记录成功"]
+    N39 -->|否| N41["N41 消息：记录失败"]
+    N40 --> N65["N65 公共结束"]
+    N41 --> N65
+    N42 --> N65
+    N43 --> N65
+```
+
+N30 选择自定义 SQL，输入 `uid=N00/uid`、`trial_id=N00/trial_id`：
+
+```sql
+SELECT id, trial_id, trial_plan_json, trial_status, updated_at
+FROM decision_trials
+WHERE uid='{{uid}}' AND trial_id='{{trial_id}}'
+  AND record_type='plan' AND trial_status='active'
+ORDER BY updated_at DESC LIMIT 1;
+```
+
+N31 判断 `N30/isSuccess == true`。N32 输入 `outputList=N30/outputList`：
+
+```python
+def main(outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    plan_text = str(row.get("trial_plan_json", ""))
+    return {"has_active": len(row) > 0 and len(plan_text.strip()) > 2, "trial_plan_json": plan_text if plan_text else "{}"}
+```
+
+输出 `has_active:Boolean`、`trial_plan_json:String`。N33 判断 `has_active == true`。
+
+N34 输入 user_input、day_number=N01/day_number、trial_plan_json。系统提示词只提取“实际做了什么、时长、证据、感受、阻碍、是否触发停止条件”，不得把计划写成已完成。N35 输出 `daily_log_json:String`、`day_number:Integer`、`reply:String`。
+
+N36：
+
+```python
+def main(uid, trial_id, request_time, day_number, daily_log_json, reply):
+    try: day = int(day_number)
+    except: day = 0
+    valid_day = 1 <= day <= 7
+    return {
+        "log_valid": valid_day, "log_error": "" if valid_day else "day_number 必须为 1～7",
+        "trial_id": str(trial_id), "record_type": "daily_log", "decision_json": "{}", "trial_plan_json": "{}",
+        "pending_json": "{}", "confirmation_token": "", "day_number": day,
+        "daily_log_json": str(daily_log_json), "review_json": "{}", "trial_status": "active",
+        "updated_at": str(request_time), "reply": str(reply)
+    }
+```
+
+N36 输出 `log_valid:Boolean`、`day_number:Integer`，以及 `log_error/trial_id/record_type/decision_json/trial_plan_json/pending_json/confirmation_token/daily_log_json/review_json/trial_status/updated_at/reply:String`。N37 判断 `N36/log_valid == true`；false → N42（消息中显示 N36/log_error），true → N38。N38 表单新增 DB-09 全字段，N39 判断 `N38/isSuccess == true`，N40/N41 分别展示成功或 N38/message。
+
+## 7. 第七天复盘 N44～N58
+
+```mermaid
+flowchart LR
+    N44["N44 数据库：读取计划和日志"] --> N45{"N45 分支器：SQL 成功？"}
+    N45 -->|否| N58["N58 消息：复盘读取失败"]
+    N45 -->|是| N46["N46 代码：整理 7 天证据"] --> N47{"N47 分支器：证据足够？"}
+    N47 -->|否| N57["N57 消息：缺少日志"]
+    N47 -->|是| N48["N48 大模型：生成第七天复盘"] --> N49["N49 变量提取器：提取复盘"]
+    N49 --> N50["N50 代码：准备 review 行"] --> N51["N51 数据库：新增 day7_review"]
+    N51 --> N52{"N52 分支器：复盘保存成功？"}
+    N52 -->|否| N56["N56 消息：复盘未保存"]
+    N52 -->|是| N53["N53 数据库：把计划标记 completed"] --> N54{"N54 分支器：状态更新成功？"}
+    N54 -->|是| N55["N55 消息：展示完整复盘"]
+    N54 -->|否| N56
+    N55 --> N65["N65 公共结束"]
+    N56 --> N65
+    N57 --> N65
+    N58 --> N65
+```
+
+N44 自定义 SQL，输入 uid、trial_id：
+
+```sql
+SELECT id, trial_id, record_type, trial_plan_json, day_number,
+       daily_log_json, trial_status, updated_at
+FROM decision_trials
+WHERE uid='{{uid}}' AND trial_id='{{trial_id}}'
+  AND record_type IN ('plan','daily_log')
+ORDER BY day_number ASC, updated_at ASC;
+```
+
+N45 判断 `N44/isSuccess == true`。
+
+N46 输入 `outputList=N44/outputList`：
+
+```python
+def main(outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    plan_json = "{}"
+    logs = []
+    for row in rows:
+        if isinstance(row, dict) and row.get("record_type") == "plan":
+            plan_json = str(row.get("trial_plan_json", "{}"))
+        if isinstance(row, dict) and row.get("record_type") == "daily_log" and len(str(row.get("daily_log_json", "")).strip()) > 2:
+            logs.append(row)
+    return {
+        "plan_json": plan_json,
+        "daily_logs": logs,
+        "log_count": len(logs),
+        "review_ready": len(logs) >= 3 and len(plan_json.strip()) > 2,
+    }
+```
+
+输出 `plan_json:String`、`daily_logs:Array<Object>`、`log_count:Integer`、`review_ready:Boolean`。N47 判断 `review_ready == true`。
+
+N48 要求依据真实日志比较预期与实际、有效证据、反例、成本、是否继续/调整/停止，输出 `{"review":{},"recommendation":"continue|adjust|stop","reply":""}`。N49 输出 `review_json:String`、`recommendation:String`、`reply:String`。
+
+N50 输入 `uid=N00/uid`、`trial_id=N00/trial_id`、`request_time=N00/request_time`、`review_json=N49/review_json`、`reply=N49/reply`：
+
+```python
+def main(uid, trial_id, request_time, review_json, reply):
+    return {
+        "trial_id": str(trial_id), "record_type": "day7_review",
+        "decision_json": "{}", "trial_plan_json": "{}", "pending_json": "{}",
+        "confirmation_token": "", "day_number": 7, "daily_log_json": "{}",
+        "review_json": str(review_json), "trial_status": "completed",
+        "updated_at": str(request_time), "reply": str(reply)
+    }
+```
+
+输出区声明 `day_number:Integer`，以及 `trial_id/record_type/decision_json/trial_plan_json/pending_json/confirmation_token/daily_log_json/review_json/trial_status/updated_at/reply:String`。N51 选择表单新增 DB-09，逐字段映射 N50 的 `trial_id/record_type/decision_json/trial_plan_json/pending_json/confirmation_token/day_number/daily_log_json/review_json/trial_status/updated_at`；页面强制 uid 时引用 N00/uid。N52 判断 `N51/isSuccess == true`。
+
+N53 表单更新 DB-09：范围 uid+trial_id+record_type 固定 `plan`；更新 trial_status=`completed`、updated_at=request_time。N54 判断 isSuccess。N55 展示 reply+review_json，并说明若要改主规划需进入 WF-06。
+
+## 8. 停止、安全、结束
+
+停止路径使用 N59 数据库：表单更新 DB-09，范围 uid+trial_id+record_type=plan；更新 trial_status=stopped、updated_at=request_time。N60 判断 isSuccess；成功到 N61“试错已停止，已有日志保留”，失败到 N62 并显示 message。
+
+```mermaid
+flowchart LR
+    N59["N59 数据库：停止试错"] --> N60{"N60 分支器：停止成功？"}
+    N60 -->|是| N61["N61 消息：试错已停止"] --> N65["N65 公共结束"]
+    N60 -->|否| N62["N62 消息：停止失败"] --> N65
+```
+
+N63 安全消息：`这个请求可能涉及人身安全、严重健康或违法风险。我不能把它当作普通七天试错。请立即停止相关行动，并联系可信任的人或当地专业/紧急支持。`
+
+N64：说明支持“即时分析、创建试错、确认启动、每日记录、第七天复盘、停止试错”，并要求 trial_id。
+
+所有消息连接 N65。N65 配置 `output｜输入｜workflow_finished`，回答内容“本轮处理已结束，请以上方消息节点的提示为准。”，流式关闭。
+
+## 9. 调试指南
+
+1. analysis：应新增 record_type=analysis，不进入确认。
+2. create_trial：必须 7 天、含证据和停止条件，新增 pending，返回 token。
+3. 错 token：不能激活；正确 token 后 plan 行 active。
+4. daily_log：无 active 计划到 N42；day_number 超范围不写入。
+5. day7_review：不足 3 条日志到 N57；足够后新增 review 并把 plan 改 completed。
+6. stop：只把计划状态改 stopped，不删除日志。
+7. safety：高风险输入直接 N63，不调用普通决策模型。
+
+## 10. 验收清单
+
+- [ ] 五种模式和 stop/unknown/safety 均有独立终点。
+- [ ] pending 计划只有 token 确认后才 active。
+- [ ] 日志只记录事实，不把计划当完成。
+- [ ] 复盘保存后同时关闭 active 计划。
+- [ ] 所有数据库新增填满 DB-09 必填字段。
+- [ ] 所有代码无 import，输出区声明完整，所有消息连接 N65。

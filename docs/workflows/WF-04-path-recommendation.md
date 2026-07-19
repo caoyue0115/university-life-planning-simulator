@@ -1,193 +1,342 @@
-# WF-04 五路径推荐
+# WF-04 五路径推荐：逐节点搭建指南
 
-## 1. 目标与准备
+> 按 WF-01 的实际页面重做。WF-04 是单轮工作流：读取已确认画像和 WF-03 评估，检索知识，生成五路径推荐，校验后更新并回读。当前结束节点仍按你选的第一种方式返回 `workflow_finished`。
 
-主 Agent 在 WF-03 完成或用户要求重新评估路径时调用。输入已确认 `profile_json`、`adventure_result_json`，可选行为证据；检索包含来源和更新时间的五路径知识；输出 `data.route_recommendation_json`。推荐是可修正方案，不是预测。
+## 1. 结果和前置条件
 
-## 2. 最小可运行版
+- 必须已有 DB-01 `user_profiles` 中的 confirmed 画像。
+- 必须已有 DB-03 `route_assessments` 中由 WF-03 写入的 `assessment_id` 和 `adventure_result_json`。
+- 结果更新回同一条 DB-03 记录的 `route_recommendation_json`。
+- 五路径固定：保研、考研、就业、考公、留学；只能使用“高匹配/中匹配/待验证/当前不建议投入”，不输出成功概率。
 
-```text
-开始 → 知识库（检索五路径要求）→ 大模型（生成五路径推荐）→ 变量提取器（提取推荐）→ 结束
-```
+## 2. 分段连线图
 
-从左侧“知识与数据”拖“知识库”，再拖“大模型”“变量提取器”，放在开始与结束之间并依次连线。知识库查询映射 `profile_json` 中年级/专业和五路径；检索字段、TopK 等按本文件逐栏配置。无法稳定返回来源时，结果必须标记 `source_unavailable` 并提醒官方复核，不能编造引用。
-
-## 3. 完整业务版画布与搭建
-
-完整画布、节点数量、拖拽连线和二次校验分支统一见第 7 节。
-
-## 4. 配置、校验与变量映射
-
-知识检索输入由 `grade,major,route_names=[保研,考研,就业,考公,留学]` 组成，输出 `knowledge_hits`。大模型输入再加入画像、测试结果。保存键为 `route_recommendation`，但推荐更新不得覆盖画像或主规划。
-
-代码节点仅支持 Python。输入区配置 `input｜引用｜变量提取器/route_recommendation_json`；输出区声明 `valid:Boolean`、`errors:Array<String>`、`value:Object`：
-
-```python
-import json
-
-
-def main(input):
-    try:
-        value = json.loads(input) if isinstance(input, str) else input
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {"valid": False, "errors": ["JSON 无效"], "value": {}}
-
-    names = ["保研", "考研", "就业", "考公", "留学"]
-    levels = ["高匹配", "中匹配", "待验证", "当前不建议投入"]
-    errors = []
-    routes = value.get("routes") if isinstance(value, dict) else None
-    if not isinstance(routes, list):
-        errors.append("routes 必须是数组")
-        routes = []
-    for name in names:
-        route = next((item for item in routes if item.get("name") == name), None)
-        if not route:
-            errors.append(f"缺少路径:{name}")
-            continue
-        if route.get("level") not in levels:
-            errors.append(f"{name}等级无效")
-        for key in ["requirements", "gaps", "priorities", "evidence", "limitations"]:
-            if not isinstance(route.get(key), list):
-                errors.append(f"{name}缺少{key}")
-    if not value.get("primary_route"):
-        errors.append("缺少主路径")
-    if not isinstance(value.get("alternative_routes"), list) or not value["alternative_routes"]:
-        errors.append("缺少备选路径")
-    if not isinstance(value.get("assumptions_to_validate"), list):
-        errors.append("缺少待验证假设")
-    return {"valid": not errors, "errors": errors, "value": value}
-```
-
-## 5. 可复制的完整提示词
-
-```text
-你是可解释的大学路径规划教练。
-已确认画像：{{profile_json}}
-场景测试结果：{{adventure_result_json}}
-行为证据：{{behavior_evidence}}
-知识检索结果：{{knowledge_hits}}
-对保研、考研、就业、考公、留学逐一评估。依据“偏好匹配、能力匹配、已有履历匹配、资源条件匹配、实际行为证据，减去时间缺口、经济压力、路径风险”做定性判断，只能使用 高匹配/中匹配/待验证/当前不建议投入，不给成功概率或伪精确分数。每条路径都写典型要求、当前差距、优先补齐项、证据、局限和备选方案。选一个主路径和至少一个备选，但明确最终决定权属于用户。未知信息放 assumptions_to_validate，不得补造。政策信息带来源与更新时间；缺失则标注并提示通过学校或主管部门官方渠道复核。
-只输出合法 JSON：
-{"routes":[{"name":"保研","level":"待验证","requirements":[],"gaps":[],"priorities":[],"evidence":[],"limitations":[],"fallback":""}],"primary_route":"","alternative_routes":[],"reasoning_summary":"","assumptions_to_validate":[],"source_notes":[],"disclaimer":"每个人的大学都是独一无二的。模拟器给的是地图，最终决定和行动由你完成。"}
-注意 routes 必须恰好包含五条指定路径。
-```
-
-## 6. 调试、错误处理与验收清单
-
-- 成功：提供完整画像和 WF-03 结果；观察知识来源、五条路径、主/备选、依据和假设齐全，校验为真。
-- 缺失：移除 `adventure_result_json`，应在检索前走缺失分支，`next_action=complete_adventure`。
-- 模型漏掉“考公”：首次校验失败、修复一次；再次失败返回 `invalid_json`，不得保存。
-- 知识库不可用：可基于画像给“待验证”的一般建议，但 `error=knowledge_unavailable`，政策全部提示官方复核。
-- [ ] 只使用四级制，无概率；五路径完整。
-- [ ] 数据库写入后检查结果，失败状态为 `write_failed`。
-- [ ] 输出共享包装中的 `route_recommendation_json`，供 WF-05/WF-06 使用。
-
-## 7. 完整业务版画布、节点数量与逐边映射
-
-完整画布包含数据库 3、分支器 4、消息 3、知识库 1、大模型 2、变量提取器 2、代码 2，另加开始和结束各 1。所有生成、修复和输出统一使用 PRD 免责声明原文。
-
-从开始右侧横向摆读取、检索、生成、首次校验主线；将修复与二次校验放“首次校验”下方，将缺失、二次失败、写入失败消息放各自分支器下方。依节点清单逐个重命名后，从右侧连接点拖到图示下游左侧，并在四个分支器上逐边填写图中的条件。
-
-从空画布依次拖入并重命名“读取画像、读取测试结果、检查读取与输入、缺失提示、检索五路径要求、生成五路径推荐、提取推荐、首次完整性校验、判断首次校验、修复推荐 JSON、重新提取、二次完整性校验、判断二次校验、保存推荐、检查写入、校验失败提示”，按图连线。
+### 2.1 读取两个前置结果
 
 ```mermaid
 flowchart LR
- A["N00 开始｜开始"] --> B["N01 数据库｜读取画像"] --> C["N02 数据库｜读取测试结果"] --> D{"N03 分支器｜读取成功且输入齐全"}
- D -->|否| E["N04 消息｜缺失或读取失败"] --> Z["N05 结束｜结束"]
- D -->|是| F["N06 知识库｜检索五路径要求"] --> G["N07 大模型｜生成五路径推荐"] --> H["N08 变量提取器｜提取推荐"] --> I["N09 代码｜首次完整性校验"] --> J{"N10 分支器｜首次校验通过"}
- J -->|是| N["N11 数据库｜保存推荐"] --> O{"N12 分支器｜写入成功"}
- J -->|否| K["N13 大模型｜修复推荐 JSON"] --> L["N14 变量提取器｜重新提取"] --> M["N15 代码｜二次完整性校验"] --> P{"N16 分支器｜二次校验通过"}
- P -->|是| N
- P -->|否| X["N17 消息｜校验失败提示"] --> Z
- O -->|是| Z
- O -->|否| Y["N18 消息｜推荐未保存"] --> Z
+    N00["N00 开始"] --> N01["N01 数据库：读取 confirmed 画像"]
+    N01 --> N02{"N02 分支器：画像 SQL 成功？"}
+    N02 -->|否| N31["N31 消息：画像读取失败"]
+    N02 -->|是| N03["N03 代码：整理画像"]
+    N03 --> N04{"N04 分支器：有 confirmed 画像？"}
+    N04 -->|否| N29["N29 消息：缺少画像"]
+    N04 -->|是| N05["N05 数据库：读取 WF-03 评估"]
+    N05 --> N06{"N06 分支器：评估 SQL 成功？"}
+    N06 -->|否| N32["N32 消息：评估读取失败"]
+    N06 -->|是| N07["N07 代码：整理评估"]
+    N07 --> N08{"N08 分支器：找到评估？"}
+    N08 -->|否| N30["N30 消息：缺少评估"]
+    N29 --> N34["N34 公共结束"]
+    N30 --> N34
+    N31 --> N34
+    N32 --> N34
 ```
 
-![WF-04 路径推荐分支图](images/WF-04-path-recommendation.png)
+### 2.2 检索、生成和校验
 
-逐边变量：A→B/C `uid`；B/C→D `profile_json,adventure_result_json,read_result`；D是→F `grade,major,五路径名`；F→G `profile_json,adventure_result_json,knowledge_hits`；G→H `model_text`；H→I `route_recommendation_json`；I→J `valid,errors,value`；J否→K `value,errors`；K→L `repaired_text`；L→M `route_recommendation_json`；M→P `valid,errors,value`；J是/P是→N `uid,value`；N→O `write_result`。
+```mermaid
+flowchart LR
+    N08{"N08 分支器：找到评估？"} -->|是| N09["N09 文本处理：生成检索问题"]
+    N09 --> N10["N10 知识库：检索五路径要求"]
+    N10 --> N11["N11 代码：检查检索结果"]
+    N11 --> N12{"N12 分支器：知识可用？"}
+    N12 -->|否| N33["N33 消息：知识不可用"]
+    N12 -->|是| N13["N13 大模型：生成五路径推荐"]
+    N13 --> N14["N14 变量提取器：提取推荐"]
+    N14 --> N15["N15 代码：校验五路径"]
+    N15 --> N16{"N16 分支器：结果完整？"}
+    N16 -->|否| N28["N28 消息：模型结果无效"]
+    N28 --> N34["N34 公共结束"]
+    N33 --> N34
+```
 
-修复完整提示词：
+### 2.3 更新、回读和结束
+
+```mermaid
+flowchart LR
+    N16{"N16 分支器：结果完整？"} -->|是| N17["N17 数据库：更新推荐"]
+    N17 --> N18{"N18 分支器：更新成功？"}
+    N18 -->|否| N26["N26 消息：推荐未保存"]
+    N18 -->|是| N19["N19 数据库：回读推荐"]
+    N19 --> N20{"N20 分支器：回读 SQL 成功？"}
+    N20 -->|否| N27["N27 消息：回读失败"]
+    N20 -->|是| N21["N21 代码：比较回读结果"]
+    N21 --> N22{"N22 分支器：回读一致？"}
+    N22 -->|是| N25["N25 消息：展示并确认保存成功"]
+    N22 -->|否| N27
+    N25 --> N34["N34 公共结束"]
+    N26 --> N34
+    N27 --> N34
+```
+
+N25～N33 所有消息连接 N34 结束。
+
+## 3. N00 开始
+
+| 变量名 | 类型 | 必填 | 调试值 |
+|---|---|---:|---|
+| `AGENT_USER_INPUT` | String | 是 | `根据场景测试给我五路径建议` |
+| `uid` | String | 是 | `test_user_001` |
+| `assessment_id` | String | 是 | WF-03 N23 生成并写入的 ID |
+| `request_time` | String | 是 | `2026-07-19 14:00:00` |
+
+## 4. N01～N04：读取并整理 confirmed 画像
+
+N01 选“自定义SQL”、数据库 `university`；输入 `uid=N00/uid`：
+
+```sql
+SELECT id, uid, profile_json, pending_status, record_version, updated_at
+FROM user_profiles
+WHERE uid='{{uid}}' AND pending_status='confirmed'
+ORDER BY updated_at DESC, create_time DESC
+LIMIT 1;
+```
+
+N02：`N01/isSuccess == true`；是 → N03，否 → N31。
+
+N03 输入 `outputList=N01/outputList`：
+
+```python
+def main(outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    profile_text = row.get("profile_json", "")
+    return {
+        "has_profile": len(row) > 0 and isinstance(profile_text, str) and len(profile_text.strip()) > 2,
+        "profile_json": profile_text if isinstance(profile_text, str) else "{}",
+    }
+```
+
+输出 `has_profile:Boolean`、`profile_json:String`。N04：`N03/has_profile == true`；是 → N05，否 → N29。
+
+## 5. N05～N08：读取并整理 WF-03 评估
+
+N05 自定义 SQL，输入 `uid=N00/uid`、`assessment_id=N00/assessment_id`：
+
+```sql
+SELECT id, uid, assessment_id, adventure_result_json,
+       route_recommendation_json, assessment_version, updated_at
+FROM route_assessments
+WHERE uid='{{uid}}' AND assessment_id='{{assessment_id}}'
+ORDER BY assessment_version DESC, updated_at DESC
+LIMIT 1;
+```
+
+N06：`N05/isSuccess == true`；是 → N07，否 → N32。
+
+N07 输入 `outputList=N05/outputList`：
+
+```python
+def main(outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    result_text = row.get("adventure_result_json", "")
+    try:
+        version_value = int(row.get("assessment_version", 0))
+    except:
+        version_value = 0
+    return {
+        "has_assessment": len(row) > 0 and isinstance(result_text, str) and len(result_text.strip()) > 2,
+        "record_id": int(row.get("id", 0)) if str(row.get("id", "0")).isdigit() else 0,
+        "adventure_result_json": result_text if isinstance(result_text, str) else "{}",
+        "next_assessment_version": version_value + 1,
+    }
+```
+
+输出 `has_assessment:Boolean`、`record_id:Integer`、`adventure_result_json:String`、`next_assessment_version:Integer`。N08：`N07/has_assessment == true`；是 → N09，否 → N30。
+
+## 6. N09 文本处理和 N10 知识库
+
+N09 拖“文本处理节点”，处理方式选“字符串拼接”。输入：`profile_json=N03/profile_json`、`adventure_result_json=N07/adventure_result_json`。规则：
 
 ```text
-你只修复 JSON 结构，不新增事实、不改变已有等级和依据。原 JSON：{{value}}；校验错误：{{errors}}。补齐且仅补齐五条路径（保研、考研、就业、考公、留学）、合法等级、requirements/gaps/priorities/evidence/limitations 数组、primary_route、至少一个 alternative_routes、assumptions_to_validate、source_notes、disclaimer。缺少事实时填空数组或“待验证”，不得编造来源。disclaimer 必须逐字为：每个人的大学都是独一无二的。模拟器给的是“地图”，但“走路”的人是你自己。勇敢去闯，错了也没关系——毕竟，大学本身就是试错成本最低的地方呀！只输出合法 JSON。
+请检索与以下学生画像和场景测试相关的保研、考研、就业、考公、留学五条路径要求、时间节点、典型材料、风险和官方核验渠道。
+画像：{{profile_json}}
+测试：{{adventure_result_json}}
 ```
 
-生成提示词中的免责声明也必须替换为上述 PRD 原文。二次校验通过才允许保存；失败固定返回 `validation_failed`，不保存。保存成功结束：`{"workflow_id":"WF-04","version":"1.0","status":"completed","reply":"已生成并保存可解释的五路径建议，最终决定由你作出。","data":{"route_recommendation_json":{{value}}},"suggested_writes":[],"next_action":"create_parallel_versions","error":null}`。写入失败：`status=write_failed,reply=推荐已生成但未保存成功,next_action=retry_save,error={"code":"write_failed","message":"推荐未保存成功","retryable":true}`；读取失败用 `read_failed`，两次校验失败用 `validation_failed`。
+固定输出 `output:String`。
 
-## 节点逐项配置
+N10 拖“知识库”：输入 `query｜引用｜N09/output`；点击“+ 添加知识库”选项目五路径知识库；调用逻辑“强制调用”；参数设置 Top K=`3`、Score 阈值=`0.20`；输出固定 `results:Array<Object>`。
 
-<!-- GENERATED-NODE-LEDGER:START -->
-### 画布节点连线与页面输入输出总表
+## 7. N11/N12：检查知识结果
 
-本表由流程图生成，用于防止漏连。‘直接上游’决定页面引用下拉框中可选的数据来源；具体变量名以本文件后续业务映射表为准。
-开始节点类型规则：`uid/session_id/AGENT_USER_INPUT` 及所有 `*_json/*_token/*_id` 均选 String；计数、天数选 Integer；真伪开关选 Boolean。表中未特别标注的输入一律选 String，JSON 作为字符串传递。
+N11 输入 `results=N10/results`：
 
-| 节点 | 类型 | 直接上游（输入来源） | 固定/声明输出 | 直接下游 |
-|---|---|---|---|---|
-| `A` N00 开始｜开始 | 开始 | 无（起点） | 开始节点中声明的同名变量 | B |
-| `B` N01 数据库｜读取画像 | 数据库 | A | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | C |
-| `C` N02 数据库｜读取测试结果 | 数据库 | B | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | D |
-| `D` N03 分支器｜读取成功且输入齐全 | 分支器 | C | 不产生业务变量；按条件输出连线 | E（否）、F（是） |
-| `E` N04 消息｜缺失或读取失败 | 消息 | D | 不新增业务变量；回答内容引用上游变量 | Z |
-| `Z` N05 结束｜结束 | 结束 | E、X、O、Y | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
-| `F` N06 知识库｜检索五路径要求 | 知识库 | D | `results:Array<Object>` | G |
-| `G` N07 大模型｜生成五路径推荐 | 大模型 | F | `output:String` | H |
-| `H` N08 变量提取器｜提取推荐 | 变量提取器 | G | `route_recommendation_json:String`（完整五路径推荐 JSON） | I |
-| `I` N09 代码｜首次完整性校验 | 代码 | H | 与 Python `main()` 返回 dict 的键完全一致 | J |
-| `J` N10 分支器｜首次校验通过 | 分支器 | I | 不产生业务变量；按条件输出连线 | N（是）、K（否） |
-| `N` N11 数据库｜保存推荐 | 数据库 | J、P | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | O |
-| `O` N12 分支器｜写入成功 | 分支器 | N | 不产生业务变量；按条件输出连线 | Z（是）、Y（否） |
-| `K` N13 大模型｜修复推荐 JSON | 大模型 | J | `output:String` | L |
-| `L` N14 变量提取器｜重新提取 | 变量提取器 | K | `route_recommendation_json:String`（修复后的完整推荐 JSON） | M |
-| `M` N15 代码｜二次完整性校验 | 代码 | L | 与 Python `main()` 返回 dict 的键完全一致 | P |
-| `P` N16 分支器｜二次校验通过 | 分支器 | M | 不产生业务变量；按条件输出连线 | N（是）、X（否） |
-| `X` N17 消息｜校验失败提示 | 消息 | P | 不新增业务变量；回答内容引用上游变量 | Z |
-| `Y` N18 消息｜推荐未保存 | 消息 | O | 不新增业务变量；回答内容引用上游变量 | Z |
-<!-- GENERATED-NODE-LEDGER:END -->
+```python
+def main(results):
+    values = results if isinstance(results, list) else []
+    return {
+        "knowledge_available": len(values) > 0,
+        "knowledge_hits": values,
+        "knowledge_error": "" if len(values) > 0 else "没有检索到可引用的五路径资料",
+    }
+```
 
-> 本节必须与[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)一起使用。先按流程图编号拖入节点并连线，再配置节点；未连线时下游“引用”下拉框会显示暂无数据。
+输出 `knowledge_available:Boolean`、`knowledge_hits:Array<Object>`、`knowledge_error:String`。N12：`knowledge_available == true`；是 → N13，否 → N33。
 
-### 本工作流所有节点的页面填写顺序
+## 8. N13 大模型：生成五路径推荐
 
-1. **开始**：按下方开始输入表逐行“+ 添加”，变量名、类型和必填状态照表填写。
-2. **自定义 SQL 数据库**：输入参数选择引用；读取结果只使用固定输出 `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>`。
-3. **表单新增/更新数据库**：选择 `university / 目标表`；新增在“设置新增数据”逐字段添加，更新先在“设置数据范围”配置 AND 条件，再在“设置更新数据”逐字段添加；固定输出仍为 `isSuccess/message/outputList`。
-4. **大模型**：输入参数名与 `{{变量名}}` 完全一致；系统提示词放角色、规则和 JSON 结构，用户提示词只放本轮变量；输出 `output:String`。
-5. **变量提取器**：输入固定为 `input｜引用｜上游大模型/output`；每个输出必须填写变量名、类型和提取描述，复杂 JSON 先用 String。
-6. **代码**：仅使用 Python `def main(...): return {...}`；输入名与形参一致，输出区声明每个返回键及类型。
-7. **分支器**：左侧选上游变量，条件选“等于”等操作；与字面量比较时比较类型选常量/固定值；每条分支和默认分支都必须连接。
-8. **消息**：输入区引用需要展示的变量，在“回答内容”用 `{{变量名}}`；流式输出关闭；消息后连接共享结束。
-9. **结束**：回答模式选“返回设定格式配置的回答”，输出设置 `output｜引用｜上游最终结果`。所有成功、失败、待补充消息都进入同一个结束节点。
+模型 `Spark4.0 Ultra`，关闭对话历史。输入：`profile_json=N03/profile_json`、`adventure_result_json=N07/adventure_result_json`、`knowledge_hits=N11/knowledge_hits`。
 
-本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
+系统提示词：
 
-需要 `user_profiles` 和 `route_assessments`，上传 [DB-01](../database/import-templates/DB-01-user-profiles.xlsx) 与 [DB-03](../database/import-templates/DB-03-route-assessments.xlsx)。
+```text
+你是可解释的大学路径规划教练。必须逐一评估保研、考研、就业、考公、留学。只能使用：高匹配、中匹配、待验证、当前不建议投入。不得给成功概率，不得虚构经历。
+每条路径必须有 name、level、requirements、gaps、priorities、evidence、limitations、fallback、source_notes。政策性要求必须来自知识结果并保留来源/更新时间；无法确认时写“请以学校或主管部门官方渠道为准”。最后给一个 primary_route、至少一个 alternative_routes，并列出 assumptions_to_validate。
+只输出合法 JSON。
+```
 
-| 开始输入 | 来源 | 调试值 |
+用户提示词：
+
+```text
+已确认画像：{{profile_json}}
+场景测试结果：{{adventure_result_json}}
+知识检索结果：{{knowledge_hits}}
+请按系统规则生成五路径推荐。
+```
+
+输出 `output:String`。
+
+## 9. N14 变量提取器和 N15 代码校验
+
+N14 输入 `input=N13/output`，输出：
+
+| 变量名 | 类型 | 描述 |
 |---|---|---|
-| `AGENT_USER_INPUT` | 开始节点 | `根据测试结果给我路径建议` |
-| `uid` | 主 Agent | `test_user_001` |
-| `assessment_id` | WF-03 结束输出 | DB-03 中测试记录的 ID |
+| `route_recommendation_json` | String | 完整推荐对象 JSON 字符串，供数据库保存 |
+| `routes` | Array | 完整 routes 数组，每项包含 name 和 level 等字段 |
+| `primary_route` | String | 主路径名称 |
+| `alternative_routes` | Array | 备选路径数组 |
+| `reply` | String | 面向用户的简短总结 |
 
-读取画像 SQL：
+N15 输入上述五项：
 
-```sql
-SELECT profile_json FROM user_profiles
-WHERE uid='{{uid}}' AND pending_status='confirmed'
-ORDER BY updated_at DESC LIMIT 1;
+```python
+def main(route_recommendation_json, routes, primary_route, alternative_routes, reply):
+    required_names = ["保研", "考研", "就业", "考公", "留学"]
+    allowed_levels = ["高匹配", "中匹配", "待验证", "当前不建议投入"]
+    values = routes if isinstance(routes, list) else []
+    found = []
+    errors = []
+    for item in values:
+        if isinstance(item, dict):
+            name = str(item.get("name", ""))
+            if name in required_names and name not in found:
+                found.append(name)
+            if item.get("level") not in allowed_levels:
+                errors.append(name + "的 level 无效")
+            for key in ["requirements", "gaps", "priorities", "evidence", "limitations", "source_notes"]:
+                if not isinstance(item.get(key), list):
+                    errors.append(name + "缺少" + key)
+    for name in required_names:
+        if name not in found:
+            errors.append("缺少路径:" + name)
+    if str(primary_route) not in required_names:
+        errors.append("primary_route 无效")
+    if not isinstance(alternative_routes, list) or len(alternative_routes) < 1:
+        errors.append("缺少备选路径")
+    text_value = str(route_recommendation_json).strip()
+    if not text_value.startswith("{") or not text_value.endswith("}"):
+        errors.append("完整 JSON 字符串无效")
+    return {
+        "valid": len(errors) == 0,
+        "error": ";".join(errors),
+        "recommendation_json": text_value if len(errors) == 0 else "",
+        "reply": str(reply),
+    }
 ```
 
-读取测试结果 SQL：
+输出 `valid:Boolean`、`error:String`、`recommendation_json:String`、`reply:String`。N16：`N15/valid == true`；是 → N17，否 → N28。
+
+## 10. N17/N18：更新推荐
+
+N17 选“表单处理数据”→ `university / route_assessments`→“更新数据”。
+
+“设置数据范围”添加两个 AND 条件：
+
+| 表字段 | 条件 | 比较类型 | 比较值 |
+|---|---|---|---|
+| `uid` | 等于 | 引用 | N00/uid |
+| `assessment_id` | 等于 | 引用 | N00/assessment_id |
+
+“设置更新数据”：
+
+| 字段 | 值 |
+|---|---|
+| `route_recommendation_json` | N15/recommendation_json |
+| `knowledge_updated_at` | N00/request_time |
+| `assessment_version` | N07/next_assessment_version |
+| `updated_at` | N00/request_time |
+
+N18：`N17/isSuccess == true`；是 → N19，否 → N26。
+
+## 11. N19～N22：回读核对
+
+N19 自定义 SQL，输入 uid、assessment_id：
 
 ```sql
-SELECT * FROM route_assessments
+SELECT route_recommendation_json, assessment_version, updated_at
+FROM route_assessments
 WHERE uid='{{uid}}' AND assessment_id='{{assessment_id}}'
-ORDER BY assessment_version DESC LIMIT 1;
+ORDER BY assessment_version DESC, updated_at DESC
+LIMIT 1;
 ```
 
-任一 `isSuccess=false` 都进入读取失败；成功空数组进入“缺少前置数据”。推荐生成并校验后，在 `route_assessments` 更新当前 `id` 的 `route_recommendation_json,knowledge_updated_at,updated_at`，再按 `uid + assessment_id` 回读。
+N20：`N19/isSuccess == true`；是 → N21，否 → N27。
 
-节点映射：两个查询的 `outputList` → 推荐大模型；大模型 `output` → 变量提取器/代码校验；校验后的 JSON → 数据库；数据库 `isSuccess` → 写入分支器；最终 `result_json` → 结束 `output`。
+N21 输入 `expected=N15/recommendation_json`、`outputList=N19/outputList`：
 
-调试正常记录、错误 assessment_id 空查询、临时错误表名三种情况。只有回读 JSON 一致才能输出 `completed/write_succeeded`。
+```python
+def main(expected, outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    stored = row.get("route_recommendation_json", "")
+    same = str(stored).strip() == str(expected).strip() and len(str(stored).strip()) > 2
+    return {"readback_matches": same, "stored_json": str(stored)}
+```
+
+输出 `readback_matches:Boolean`、`stored_json:String`。N22：`readback_matches == true`；是 → N25，否 → N27。
+
+## 12. 消息节点 N25～N33
+
+每个消息关闭流式输出并连接 N34。
+
+| 节点 | 输入 | 回答内容 |
+|---|---|---|
+| N25 保存成功 | `reply=N15/reply`、`result=N21/stored_json` | `{{reply}}\n\n完整五路径推荐：\n{{result}}` |
+| N26 更新失败 | `message=N17/message` | `推荐草稿已生成，但没有保存。错误：{{message}}` |
+| N27 回读失败 | `message=N19/message` | `数据库更新后无法确认回读一致，因此不能声称已经保存。错误：{{message}}` |
+| N28 模型无效 | `error=N15/error` | `推荐结果字段不完整，本轮未保存。缺失或错误：{{error}}` |
+| N29 缺少画像 | 无 | `没有找到已确认画像。请先完成并确认 WF-01。` |
+| N30 缺少评估 | 无 | `没有找到对应的 WF-03 场景测试结果。请先完成 WF-03，或检查 assessment_id。` |
+| N31 画像读取失败 | `message=N01/message` | `画像数据库读取失败，本轮未生成推荐。错误：{{message}}` |
+| N32 评估读取失败 | `message=N05/message` | `评估数据库读取失败，本轮未生成推荐。错误：{{message}}` |
+| N33 知识不可用 | `error=N11/knowledge_error` | `当前没有检索到可核验的五路径资料，因此本轮不生成政策性推荐。{{error}}` |
+
+## 13. N34 结束
+
+- 回答模式：返回设定格式配置的回答。
+- 输出：`output｜输入｜workflow_finished`。
+- 回答内容：`本轮处理已结束，请以上方消息节点的提示为准。`
+- 思考内容留空，流式输出关闭。
+
+## 14. 调试指南
+
+1. **正常**：使用真实存在的 uid 和 assessment_id。应走到 N25；DB-03 对应记录版本增加，回读文本一致。
+2. **缺画像**：换一个没有 confirmed 画像的 uid。应到 N29，不调用知识库和模型。
+3. **错误 assessment_id**：应到 N30，不更新数据库。
+4. **知识库空**：临时移除 N10 知识库。应到 N33，不让模型编造来源。
+5. **模型漏路径**：在 N13 测试输出中删掉“考公”。N15 valid=false，到 N28。
+6. **更新失败**：临时清空 N17 的更新范围。应到 N26，测试后恢复。
+7. **回读不一致**：临时让 N21 expected 引用错误变量。应到 N27，不能出现“保存成功”。
+
+## 15. 验收清单
+
+- [ ] 两次数据库读取都先检查 isSuccess，再由代码整理 outputList。
+- [ ] 五条路径齐全，使用四级制，无成功概率。
+- [ ] 知识库无结果时停止，不编造政策来源。
+- [ ] 更新后回读，只有一致时 N25 才说已保存。
+- [ ] 所有代码无 import、返回键与输出声明一致。
+- [ ] 所有失败分支连接消息和 N34，没有悬空。

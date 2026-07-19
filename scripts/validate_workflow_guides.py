@@ -22,6 +22,8 @@ def main() -> int:
         if "以当前编辑器显示为准" in text:
             errors.append(f"{path.name}: contains vague UI placeholder")
         for block_index, source in enumerate(re.findall(r"```python\s*\n([\s\S]*?)```", text), start=1):
+            if re.search(r"^\s*(?:from\s+\S+\s+)?import\s+", source, re.MULTILINE):
+                errors.append(f"{path.name}: Python block {block_index} contains import")
             try:
                 compile(source, f"{path.name}:python-{block_index}", "exec")
             except SyntaxError as exc:
@@ -29,14 +31,8 @@ def main() -> int:
                     f"{path.name}: Python block {block_index} has syntax error on line {exc.lineno}: {exc.msg}"
                 )
         mermaids = re.findall(r"```mermaid\s*\n([\s\S]*?)```", text)
-        images = re.findall(r"!\[[^]]*\]\((images/[^)]+\.png)\)", text)
-        if not mermaids or len(mermaids) != len(images):
-            errors.append(
-                f"{path.name}: Mermaid/image mismatch ({len(mermaids)} blocks/{len(images)} images)"
-            )
-        for image in images:
-            if not (WORKFLOWS / image).exists():
-                errors.append(f"{path.name}: missing image {image}")
+        if not mermaids:
+            errors.append(f"{path.name}: missing Mermaid build diagram")
         for diagram_index, diagram in enumerate(mermaids, start=1):
             message_ids = set(re.findall(r'\b([A-Za-z]\w*)\[["\']?[^\]\n]*消息', diagram))
             edge_text = re.sub(
@@ -61,8 +57,13 @@ def main() -> int:
         for node_id, routes in decision_routes.items():
             if len(routes) < 2:
                 errors.append(f"{path.name}: brancher {node_id} has fewer than two outgoing routes")
-        if "## 节点逐项配置" not in text and path.name != "WF-01-user-profile.md":
-            errors.append(f"{path.name}: missing '节点逐项配置' section")
+        if path.name != "WF-01-user-profile.md":
+            if "逐节点搭建指南" not in text.splitlines()[0]:
+                errors.append(f"{path.name}: title does not identify a node-by-node build guide")
+            if "调试指南" not in text:
+                errors.append(f"{path.name}: missing debugging guide")
+            if "验收清单" not in text:
+                errors.append(f"{path.name}: missing acceptance checklist")
 
     if errors:
         print("\n".join(f"ERROR: {item}" for item in errors))

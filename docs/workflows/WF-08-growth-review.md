@@ -1,252 +1,270 @@
-# WF-08 成长复盘与动态修正搭建指南
+# WF-08 成长复盘与动态修正：逐节点搭建指南
 
-## 1. 目标与调用时机
+> WF-08 只保存“复盘记录”和“建议变更草稿”，不直接修改主规划或学期任务。建议微调时由 WF-07 执行；建议切换主路径时由 WF-06 再次确认。这样不会出现复盘模型直接改正式数据的问题。
 
-当成绩/排名显著变化、新增重要经历、连续任务未完成、预算或地域变化、用户修改目标或完成七天试错时调用。读取主规划、近期任务和行动证据，给出继续、微调或建议切换；不得直接覆盖主规划。输出 `growth_review_json`。
+## 1. 数据表和输入
 
-## 2. 搭建前准备
+准备 DB-05 `main_plans`、DB-06 `semester_tasks`、[DB-07 growth_reviews](../database/import-templates/DB-07-growth-reviews.xlsx)。默认字段保留。
 
-输入：`AGENT_USER_INPUT`,`uid`,`session_id`,`main_plan_json`，可选 `semester_tasks_json`,`action_records_json`,`new_evidence_json`,`trigger_reason`,`confirm_action`,`confirmation_token`。准备只读的主规划、任务、行动记录，以及可存 pending 和正式记录的“成长复盘”实体。任何技能点亮必须绑定证据。具体数据库字段按本文件逐栏配置；降级为长期记忆检索/写入时，使用 `uid + growth_review + 时间` 保存复盘，不覆盖 `main_plan`。
+N00 开始：
 
-## 3. 最小可运行版
+| 变量 | 类型 | 必填 | 调试值 |
+|---|---|---:|---|
+| `AGENT_USER_INPUT` | String | 是 | `帮我复盘最近一个月的执行情况` |
+| `uid` | String | 是 | `test_user_001` |
+| `plan_id` | String | 是 | 当前 active 规划 ID |
+| `request_time` | String | 是 | `2026-07-19 18:00:00` |
 
-```text
-开始 → 大模型（生成成长复盘草案）→ 结束
-```
-
-拖入一个“大模型”，映射主规划、用户输入和行动记录，连接结束。输出只能是 `status=draft`；没有实际证据时必须标为待验证。
-
-## 4. 完整业务版画布
-
-![WF-08 成长复盘与动态修正画布](images/WF-08-growth-review.png)
+## 2. 分段流程图
 
 ```mermaid
 flowchart LR
-    A["N00 开始"] --> A1["N01 变量提取器：提取 confirm_action 与 confirmation_token"] --> A2["N02 数据库：读取主规划与 pending_review"] --> A3{"N03 分支器：本轮是否确认保存"}
-    A3 -- "none/modify：生成复盘" --> C["N04 数据库：读取近期任务"] --> D["N05 数据库：读取行动证据"]
-    A3 -- "confirm：确认草稿" --> X["N06 代码：校验 token 与确认动作"] --> W
-    A3 -- "cancel：取消" --> XC["N07 消息：已取消，未保存复盘"] --> Z
-    D --> E["N08 代码：识别触发与证据质量"] --> F{"N09 分支器：信息是否足够"}
-    F -- "否" --> G["N10 消息：追问事实或证据"] --> Z["N11 结束"]
-    F -- "是" --> H["N12 大模型：生成成长复盘"] --> I["N13 变量提取器：提取复盘结构"] --> J["N14 代码：校验建议"]
-    J --> K{"N15 分支器：建议类型"}
-    K -- "继续" --> W["N16 数据库：写入复盘状态（pending/final）"] --> Y{"N17 分支器：写入类型与结果"}
-    Y -- "pending 成功" --> M["N18 消息：展示复盘与确认口令"] --> Z
-    Y -- "final 成功" --> R["N19 消息：复盘已保存"] --> Z
-    Y -- "失败" --> Q["N20 消息：写入失败"] --> Z
-    K -- "微调" --> S["N21 消息：展示微调草案"] --> T["N22 消息：引导 WF-07"] --> Z
-    K -- "建议切换" --> U["N23 消息：展示影响与机会成本"] --> V["N24 消息：引导 WF-06 再次确认"] --> Z
+    N00["N00 开始"] --> N01["N01 数据库：读取 active 主规划"]
+    N01 --> N02{"N02 分支器：规划读取成功？"}
+    N02 -->|否| N24["N24 消息：规划读取失败"]
+    N02 -->|是| N03["N03 代码：整理主规划"]
+    N03 --> N04{"N04 分支器：有 active 规划？"}
+    N04 -->|否| N23["N23 消息：缺少主规划"]
+    N04 -->|是| N05["N05 数据库：读取近期任务"]
+    N05 --> N06{"N06 分支器：任务读取成功？"}
+    N06 -->|否| N25["N25 消息：任务读取失败"]
+    N06 -->|是| N07["N07 代码：整理行为证据"]
+    N07 --> N08{"N08 分支器：信息足够？"}
+    N08 -->|否| N26["N26 消息：追问证据"]
+    N08 -->|是| N09["N09 大模型：生成成长复盘"]
+    N23 --> N30["N30 公共结束"]
+    N24 --> N30
+    N25 --> N30
+    N26 --> N30
 ```
+
+```mermaid
+flowchart LR
+    N09 --> N10["N10 变量提取器：提取复盘"]
+    N10 --> N11["N11 代码：校验并准备复盘行"]
+    N11 --> N12{"N12 分支器：复盘有效？"}
+    N12 -->|否| N27["N27 消息：复盘无效"]
+    N12 -->|是| N13["N13 数据库：新增复盘"]
+    N13 --> N14{"N14 分支器：写入成功？"}
+    N14 -->|否| N28["N28 消息：复盘未保存"]
+    N14 -->|是| N15["N15 数据库：回读复盘"]
+    N15 --> N16{"N16 分支器：回读 SQL 成功？"}
+    N16 -->|否| N29["N29 消息：回读失败"]
+    N16 -->|是| N17["N17 代码：核对回读"]
+    N17 --> N18{"N18 分支器：回读一致？"}
+    N18 -->|否| N29
+    N18 -->|是| N19{"N19 分支器：建议类型"}
+    N19 -->|continue| N20["N20 消息：继续当前规划"]
+    N19 -->|adjust| N21["N21 消息：建议进入 WF-07 微调"]
+    N19 -->|consider_switch| N22["N22 消息：建议进入 WF-06 重新确认"]
+    N20 --> N30["N30 公共结束"]
+    N21 --> N30
+    N22 --> N30
+    N27 --> N30
+    N28 --> N30
+    N29 --> N30
+```
+
+所有消息连接 N30 结束。
+
+## 3. N01～N04：读取主规划
+
+N01 自定义 SQL，输入 `uid=N00/uid`、`plan_id=N00/plan_id`：
+
+```sql
+SELECT plan_id, plan_json, plan_status, record_version, updated_at
+FROM main_plans
+WHERE uid='{{uid}}' AND plan_id='{{plan_id}}' AND plan_status='active'
+ORDER BY updated_at DESC LIMIT 1;
+```
+
+N02：`N01/isSuccess == true`；是 → N03，否 → N24。
+
+N03 输入 outputList：
+
+```python
+def main(outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    plan_text = str(row.get("plan_json", ""))
+    return {"has_plan": len(row) > 0 and len(plan_text.strip()) > 2, "plan_json": plan_text if plan_text else "{}"}
+```
+
+输出 `has_plan:Boolean`、`plan_json:String`。N04：true → N05，false → N23。
+
+## 4. N05～N08：读取并整理任务证据
+
+N05 自定义 SQL，输入 uid、plan_id：
+
+```sql
+SELECT task_id, task, deadline, priority, status, expected_evidence,
+       actual_evidence, delay_reason, action_log_json, updated_at
+FROM semester_tasks
+WHERE uid='{{uid}}' AND plan_id='{{plan_id}}'
+ORDER BY updated_at DESC, create_time DESC
+LIMIT 100;
+```
+
+N06：`N05/isSuccess == true`；是 → N07，否 → N25。
+
+N07 输入 `outputList=N05/outputList`、`user_input=N00/AGENT_USER_INPUT`：
+
+```python
+def main(outputList, user_input):
+    rows = outputList if isinstance(outputList, list) else []
+    evidence_rows = []
+    completed = 0
+    postponed = 0
+    with_evidence = 0
+    for row in rows:
+        if isinstance(row, dict):
+            status = str(row.get("status", ""))
+            if status == "completed": completed += 1
+            if status == "postponed": postponed += 1
+            if str(row.get("actual_evidence", "")).strip(): with_evidence += 1
+            evidence_rows.append(row)
+    enough = len(evidence_rows) > 0 or len(str(user_input).strip()) >= 20
+    summary = "任务数=" + str(len(evidence_rows)) + ",完成=" + str(completed) + ",延期=" + str(postponed) + ",有证据=" + str(with_evidence)
+    return {
+        "evidence_enough": enough,
+        "evidence_rows": evidence_rows,
+        "evidence_summary_text": summary,
+        "question_for_user": "请补充最近完成、延期或放弃了什么，以及可验证的成果。" if not enough else "",
+    }
+```
+
+输出 `evidence_enough:Boolean`、`evidence_rows:Array<Object>`、`evidence_summary_text:String`、`question_for_user:String`。N08：true → N09，false → N26。
+
+## 5. N09 大模型：生成成长复盘
+
+模型 `Spark4.0 Ultra`，关闭对话历史。输入 `user_input=N00/AGENT_USER_INPUT`、`plan_json=N03/plan_json`、`evidence_rows=N07/evidence_rows`、`evidence_summary=N07/evidence_summary_text`。
+
+系统提示词：
 
 ```text
-开始 → 变量提取器（提取确认动作与 token）→ 数据库（读取主规划与 pending_review）→ 分支器（本轮是否确认保存）
- ├─ 生成复盘 → 数据库（读取近期任务）→ 数据库（读取行动证据）
- → 代码（识别触发与证据质量）→ 分支器（信息是否足够）
- ├─ 否 → 消息（追问事实或证据）→ 结束
- └─ 是 → 大模型（生成成长复盘）→ 变量提取器（提取复盘结构）→ 代码（校验建议）
-       → 分支器（建议类型）
-       ├─ 继续 → 数据库（保存 pending_review + token）→ 消息（展示复盘与口令）→ 结束
-       ├─ 微调 → 消息（展示微调草案）→ 消息（引导 WF-07）→ 结束
-       └─ 建议切换 → 消息（展示影响与机会成本）→ 消息（引导 WF-06 再次确认）→ 结束
- └─ 确认草稿 → 代码（校验 token 与 confirm_action）→ 数据库（写入复盘状态，final 模式）→ 写入类型与结果 → 成功/失败消息 → 结束
-```
-
-拖入 4 个“数据库”（合并读取主规划与 pending、读取近期任务、读取行动证据、写入复盘状态）、3 个“代码”（识别证据、校验建议、校验 token）、4 个“分支器”、1 个“大模型”、2 个“变量提取器”、9 个“消息”和 1 个共享“结束”，按图连接。“写入复盘状态”按输入 `write_mode=pending/final` 复用：pending 保存草稿和 token，final 写正式复盘。第一个数据库节点按 `uid` 查询主规划，并按 token 可选查询 pending；不支持一次返回两类记录时改用“长期记忆检索”读取 pending，仍保持 4 个数据库。
-
-## 5. 节点配置与变量映射
-
-| 节点 | 查询/输入 | 输出 |
-|---|---|---|
-| 读取近期任务 | `uid` + `plan_id` + 最近周期 | `semester_tasks_json` |
-| 读取行动证据 | `uid` + 最近周期 | `action_records_json` |
-| 识别触发与证据质量 | 用户输入及三份数据 | `trigger_reason,facts,evidence,assumptions,info_sufficient` |
-| 生成成长复盘 | 上述结构化值 | JSON 文本 |
-| 提取复盘结构 | 模型文本 | `growth_review_json` |
-| 校验建议 | 复盘 JSON | `review_valid,review_error,recommendation_type,next_workflow` |
-| 建议类型 | `recommendation_type` | `continue` / `fine_tune` / `consider_switch` |
-| 写入复盘状态 | `write_mode`,`growth_review_json`,`confirmation_token` | pending 模式保存草稿；final 模式只写成长复盘记录；输出 `review_write_ok` |
-| 读取主规划与 pending_review | `uid`，可选 `confirmation_token` | `main_plan_json`,`pending_review_json`；pending 含过期时间 |
-| 校验 token 与确认动作 | 本轮 `confirm_action`、token、pending | 三者匹配且未过期才 `confirmation_valid=true` |
-
-事实、推断和证据必须分开：`facts` 只放用户明确陈述或数据库事实；`evidence` 记录证据类型与位置；模型解释放 `assumptions` 并标“待验证”。校验必须拒绝 `consider_switch` 缺少 `impact_on_main_plan,opportunity_cost,alternatives,confirmation_required` 的结果。
-
-### 三个代码节点：页面输入、Python 与输出
-
-N06 输入 `pending_review_json`、`confirm_action`、`confirmation_token`、`uid`；输出 `confirmation_valid:Boolean`、`confirmation_error:String`：
-
-```python
-import json
-
-def main(pending_review_json, confirm_action, confirmation_token, uid):
-    try:
-        pending = json.loads(pending_review_json) if isinstance(pending_review_json, str) else (pending_review_json or {})
-        valid = confirm_action == "confirm" and bool(confirmation_token) and pending.get("confirmation_token") == confirmation_token and pending.get("uid") == uid and pending.get("status") == "pending"
-        return {"confirmation_valid": valid, "confirmation_error": "" if valid else "确认动作、用户、token 或 pending 状态不匹配"}
-    except Exception as exc:
-        return {"confirmation_valid": False, "confirmation_error": str(exc)}
-```
-
-N08 输入 `AGENT_USER_INPUT`、`main_plan_json`、`semester_tasks_json`、`action_records_json`、`new_evidence_json`、`trigger_reason`；输出 `facts:Array<String>`、`evidence:Array<Object>`、`assumptions:Array<String>`、`info_sufficient:Boolean`：
-
-```python
-import json
-
-def main(AGENT_USER_INPUT, main_plan_json, semester_tasks_json, action_records_json, new_evidence_json, trigger_reason):
-    def obj(value):
-        return json.loads(value) if isinstance(value, str) and value.strip() else (value or {})
-    try:
-        plan, tasks, actions, new_evidence = map(obj, (main_plan_json, semester_tasks_json, action_records_json, new_evidence_json))
-        facts = [AGENT_USER_INPUT] if AGENT_USER_INPUT else []
-        evidence = [{"source": "tasks", "value": tasks}, {"source": "actions", "value": actions}, {"source": "new_evidence", "value": new_evidence}]
-        sufficient = bool(plan) and bool(trigger_reason or facts) and any(bool(item["value"]) for item in evidence)
-        return {"facts": facts, "evidence": evidence, "assumptions": [], "info_sufficient": sufficient}
-    except Exception:
-        return {"facts": [], "evidence": [], "assumptions": [], "info_sufficient": False}
-```
-
-N14 输入 `growth_review_json`；输出 `review_valid:Boolean`、`review_error:String`、`recommendation_type:String`、`next_workflow:String`：
-
-```python
-import json
-
-def main(growth_review_json):
-    try:
-        review = json.loads(growth_review_json) if isinstance(growth_review_json, str) else (growth_review_json or {})
-        kind = review.get("recommendation_type", "")
-        valid = kind in ("continue", "fine_tune", "consider_switch")
-        if kind == "consider_switch":
-            valid = valid and all(review.get(key) not in (None, "", []) for key in ("impact_on_main_plan", "opportunity_cost", "alternatives")) and review.get("confirmation_required") is True
-        next_workflow = {"continue": "none", "fine_tune": "WF-07", "consider_switch": "WF-06"}.get(kind, "none")
-        return {"review_valid": valid, "review_error": "" if valid else "建议类型或切换必填信息无效", "recommendation_type": kind, "next_workflow": next_workflow}
-    except Exception as exc:
-        return {"review_valid": False, "review_error": str(exc), "recommendation_type": "", "next_workflow": "none"}
-```
-
-## 6. 可复制完整提示词
-
-```text
-你是审慎、非惩罚性的大学成长教练。依据当前主规划、近期任务和行为证据做阶段复盘。先陈述发生变化的事实，再解释影响；不能把推断写成事实，不能因一次未完成就建议切换，也不能直接覆盖主规划。
-
-main_plan_json={{main_plan_json}}
-semester_tasks_json={{semester_tasks_json}}
-action_records_json={{action_records_json}}
-trigger_reason={{trigger_reason}}
-facts={{facts}}
-evidence={{evidence}}
-assumptions={{assumptions}}
-
+你是大学成长复盘教练。必须区分用户自述、数据库行为证据和推断；不得把没完成简单归因于懒惰。输出事实、变化、有效策略、阻碍、证据缺口和下一周期动作。
+recommendation_type 只能是 continue、adjust、consider_switch。continue 不生成正式变更；adjust 只给任务微调草稿；consider_switch 只说明切换影响并建议进入 WF-06，不能直接改主规划。
 只输出 JSON：
-{"review_period":"","trigger_reason":"","changed_facts":[],"evidence_assessment":[{"claim":"","evidence_type":"用户陈述/行为已验证/待验证推断","evidence":""}],"progress":{"completed":[],"unfinished":[],"patterns":[]},"impact_on_main_plan":[],"recommendation_type":"continue/fine_tune/consider_switch","recommendation_reasons":[],"suggested_changes":[],"opportunity_cost":[],"alternatives":[],"skills_and_achievements":[{"item":"","evidence":"","eligible":false}],"confirmation_required":false,"next_workflow":"none/WF-07/WF-06","limitations":[],"supportive_reply":""}
-
-判定：基本假设仍成立且进展合理用 continue；执行层时间、优先级或任务粒度需变用 fine_tune；目标、约束或关键证据发生结构性变化才用 consider_switch。建议切换时 confirmation_required=true、next_workflow=WF-06。技能或徽章没有行为/成果证据时 eligible=false。不排行榜、不惩罚、不制造焦虑。
+{"review":{},"recommendation_type":"continue","pending_change":{},"evidence_summary":{},"reply":""}
 ```
 
-## 7. 确认、写入和失败处理
+用户提示词：
 
-生成复盘无需确认；要保存时，第一次调用只保存 `pending_review_json + confirmation_token` 并结束，返回 `awaiting_confirmation`。下一次调用读取 pending，只有 token、`uid`、未过期状态一致且 `confirm_action=confirm` 才写复盘；cancel 删除/失效 pending，modify 生成新 token。微调只交 WF-07，建议切换只交 WF-06，并明确主规划未改变。写入失败返回 `write_failed` 和复盘草案，不得称已保存。
+```text
+用户复盘请求：{{user_input}}
+当前主规划：{{plan_json}}
+近期任务：{{evidence_rows}}
+证据统计：{{evidence_summary}}
+```
 
-## 8. 调试用例
+输出 `output:String`。
 
-- 继续：近四周核心任务大多完成且有项目链接。预期 `continue`，可点亮项目相关技能但必须附证据。
-- 微调：连续两周因课程冲突延期，目标未变。预期 `fine_tune`、`next_workflow=WF-07`，给出缩小任务或改期方案。
-- 建议切换：预算显著下降且用户明确不再留学。预期说明事实、影响、机会成本和备选，`next_workflow=WF-06`，不覆盖主规划。
-- 缺失：用户只说“我不行了，重做规划”。预期先追问具体变化，不直接切换。
-- 写入失败：保存复盘失败。预期保留草案并返回 `write_failed`。
+## 6. N10/N11/N12：提取、校验、准备写入
 
-## 9. 常见错误与验收清单
+N10 输入 `input=N09/output`，输出：
 
-- 把模型判断写成事实：检查 `evidence_type`，无证据一律“待验证推断”。
-- 微调越界：目标路径变化必须去 WF-06；普通任务修改去 WF-07。
-- 复盘覆盖主规划：数据库写入目标只能是成长复盘实体。
-
-- [ ] 六类触发均能表示，缺信息时追问。
-- [ ] 输出明确变化事实、影响、继续/微调/切换建议和机会成本。
-- [ ] 技能与成就绑定证据，无惩罚性表达。
-- [ ] 任何覆盖动作都返回 WF-06 再次确认，历史版本由 WF-06 保留。
-- [ ] 写入失败不得声称成功；输出 `growth_review_json` 可供主 Agent 和 WF-12 使用。
-
-## 节点逐项配置
-
-<!-- GENERATED-NODE-LEDGER:START -->
-### 画布节点连线与页面输入输出总表
-
-本表由流程图生成，用于防止漏连。‘直接上游’决定页面引用下拉框中可选的数据来源；具体变量名以本文件后续业务映射表为准。
-开始节点类型规则：`uid/session_id/AGENT_USER_INPUT` 及所有 `*_json/*_token/*_id` 均选 String；计数、天数选 Integer；真伪开关选 Boolean。表中未特别标注的输入一律选 String，JSON 作为字符串传递。
-
-| 节点 | 类型 | 直接上游（输入来源） | 固定/声明输出 | 直接下游 |
-|---|---|---|---|---|
-| `A` N00 开始 | 开始 | 无（起点） | 开始节点中声明的同名变量 | A1 |
-| `A1` N01 变量提取器：提取 confirm_action 与 confirmation_token | 变量提取器 | A | `confirm_action:String`（none/modify/confirm/cancel）、`confirmation_token:String` | A2 |
-| `A2` N02 数据库：读取主规划与 pending_review | 数据库 | A1 | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | A3 |
-| `A3` N03 分支器：本轮是否确认保存 | 分支器 | A2 | 不产生业务变量；按条件输出连线 | C（"none/modify：生成复盘"）、X（"confirm：确认草稿"）、XC（"cancel：取消"） |
-| `C` N04 数据库：读取近期任务 | 数据库 | A3 | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | D |
-| `D` N05 数据库：读取行动证据 | 数据库 | C | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | E |
-| `X` N06 代码：校验 token 与确认动作 | 代码 | A3 | 与 Python `main()` 返回 dict 的键完全一致 | W |
-| `W` N16 数据库：写入复盘状态（pending/final） | 数据库 | X、K | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | Y |
-| `XC` N07 消息：已取消，未保存复盘 | 消息 | A3 | 不新增业务变量；回答内容引用上游变量 | Z |
-| `Z` N11 结束 | 结束 | XC、G、M、R、Q、T、V | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
-| `E` N08 代码：识别触发与证据质量 | 代码 | D | 与 Python `main()` 返回 dict 的键完全一致 | F |
-| `F` N09 分支器：信息是否足够 | 分支器 | E | 不产生业务变量；按条件输出连线 | G（"否"）、H（"是"） |
-| `G` N10 消息：追问事实或证据 | 消息 | F | 不新增业务变量；回答内容引用上游变量 | Z |
-| `H` N12 大模型：生成成长复盘 | 大模型 | F | `output:String` | I |
-| `I` N13 变量提取器：提取复盘结构 | 变量提取器 | H | `growth_review_json:String`（完整成长复盘 JSON） | J |
-| `J` N14 代码：校验建议 | 代码 | I | 与 Python `main()` 返回 dict 的键完全一致 | K |
-| `K` N15 分支器：建议类型 | 分支器 | J | 不产生业务变量；按条件输出连线 | W（"继续"）、S（"微调"）、U（"建议切换"） |
-| `Y` N17 分支器：写入类型与结果 | 分支器 | W | 不产生业务变量；按条件输出连线 | M（"pending 成功"）、R（"final 成功"）、Q（"失败"） |
-| `M` N18 消息：展示复盘与确认口令 | 消息 | Y | 不新增业务变量；回答内容引用上游变量 | Z |
-| `R` N19 消息：复盘已保存 | 消息 | Y | 不新增业务变量；回答内容引用上游变量 | Z |
-| `Q` N20 消息：写入失败 | 消息 | Y | 不新增业务变量；回答内容引用上游变量 | Z |
-| `S` N21 消息：展示微调草案 | 消息 | K | 不新增业务变量；回答内容引用上游变量 | T |
-| `T` N22 消息：引导 WF-07 | 消息 | S | 不新增业务变量；回答内容引用上游变量 | Z |
-| `U` N23 消息：展示影响与机会成本 | 消息 | K | 不新增业务变量；回答内容引用上游变量 | V |
-| `V` N24 消息：引导 WF-06 再次确认 | 消息 | U | 不新增业务变量；回答内容引用上游变量 | Z |
-<!-- GENERATED-NODE-LEDGER:END -->
-
-> 本节必须与[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)一起使用。先按流程图编号拖入节点并连线，再配置节点；未连线时下游“引用”下拉框会显示暂无数据。
-
-### 本工作流所有节点的页面填写顺序
-
-1. **开始**：按下方开始输入表逐行“+ 添加”，变量名、类型和必填状态照表填写。
-2. **自定义 SQL 数据库**：输入参数选择引用；读取结果只使用固定输出 `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>`。
-3. **表单新增/更新数据库**：选择 `university / 目标表`；新增在“设置新增数据”逐字段添加，更新先在“设置数据范围”配置 AND 条件，再在“设置更新数据”逐字段添加；固定输出仍为 `isSuccess/message/outputList`。
-4. **大模型**：输入参数名与 `{{变量名}}` 完全一致；系统提示词放角色、规则和 JSON 结构，用户提示词只放本轮变量；输出 `output:String`。
-5. **变量提取器**：输入固定为 `input｜引用｜上游大模型/output`；每个输出必须填写变量名、类型和提取描述，复杂 JSON 先用 String。
-6. **代码**：仅使用 Python `def main(...): return {...}`；输入名与形参一致，输出区声明每个返回键及类型。
-7. **分支器**：左侧选上游变量，条件选“等于”等操作；与字面量比较时比较类型选常量/固定值；每条分支和默认分支都必须连接。
-8. **消息**：输入区引用需要展示的变量，在“回答内容”用 `{{变量名}}`；流式输出关闭；消息后连接共享结束。
-9. **结束**：回答模式选“返回设定格式配置的回答”，输出设置 `output｜引用｜上游最终结果`。所有成功、失败、待补充消息都进入同一个结束节点。
-
-本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
-
-### 准备和输入
-
-WF-08 读取 `main_plans`、`semester_tasks`、`resume_entries`、`habit_logs`，写 `growth_reviews`。请上传 [DB-05](../database/import-templates/DB-05-main-plans.xlsx)、[DB-06](../database/import-templates/DB-06-semester-tasks.xlsx)、[DB-07](../database/import-templates/DB-07-growth-reviews.xlsx)、[DB-08](../database/import-templates/DB-08-resume-entries.xlsx)、[DB-10](../database/import-templates/DB-10-habit-logs.xlsx)。
-
-开始节点点击“+ 添加”，按下表逐行配置：
-
-| 输入 | 来源 | 示例/是否必填 |
+| 变量 | 类型 | 描述 |
 |---|---|---|
-| `AGENT_USER_INPUT` | 开始节点 | “最近两周任务都没完成，帮我复盘”；必填 |
-| `uid` | 主 Agent | `test_user_001`；必填 |
-| `session_id` | 主 Agent/会话上下文 | `SESSION-TEST-001`；必填 |
-| `main_plan_json` | WF-06/当前规划查询 | active 主规划；必填 |
-| `semester_tasks_json` | WF-07/任务查询 | 可选 |
-| `action_records_json` | 行动记录查询 | 可选 |
-| `new_evidence_json` | 用户本轮提供 | 可选 |
-| `trigger_reason` | 总流程/变量提取器 | 可选，不提供则从用户原话提取 |
-| `confirm_action` | 总流程/变量提取器 | `none/modify/confirm/cancel` |
-| `confirmation_token` | 首轮 pending 输出 | 确认轮原样传回 |
+| `review_json` | String | 完整 review JSON 字符串 |
+| `recommendation_type` | String | continue/adjust/consider_switch |
+| `pending_change_json` | String | 完整建议变更 JSON；continue 时 `{}` |
+| `evidence_summary_json` | String | 完整证据摘要 JSON |
+| `reply` | String | 用户可读复盘摘要 |
 
-四个读取节点都必须带 `uid`。主规划取 active 1 条；任务取近期记录；履历和习惯允许空数组。任何 `isSuccess=false` 停止；非核心证据表为空只表示没有相关证据。
+N11 输入 `uid=N00/uid`、`plan_id=N00/plan_id`、`request_time=N00/request_time` 和 N10 全部：
 
-保存复盘到 `growth_reviews`，字段为 `review_id,plan_id,review_json,recommendation_type,pending_change_json,confirmation_token,evidence_summary_json,updated_at`。如果建议覆盖主规划，只保存 pending change 并返回 WF-06，不能直接更新 DB-05。
+```python
+def main(uid, plan_id, request_time, review_json, recommendation_type, pending_change_json, evidence_summary_json, reply):
+    allowed = ["continue", "adjust", "consider_switch"]
+    review_text = str(review_json).strip()
+    evidence_text = str(evidence_summary_json).strip()
+    errors = []
+    if not review_text.startswith("{") or not review_text.endswith("}"): errors.append("review_json 无效")
+    if str(recommendation_type) not in allowed: errors.append("recommendation_type 无效")
+    if not evidence_text.startswith("{") or not evidence_text.endswith("}"): errors.append("evidence_summary_json 无效")
+    token = str(uid) + "-REVIEW-" + str(request_time) if str(recommendation_type) != "continue" else ""
+    return {
+        "review_valid": len(errors) == 0,
+        "review_error": ";".join(errors),
+        "review_id": str(uid) + "-REVIEW-" + str(request_time),
+        "plan_id": str(plan_id),
+        "review_json": review_text,
+        "recommendation_type": str(recommendation_type),
+        "pending_change_json": str(pending_change_json) if pending_change_json else "{}",
+        "confirmation_token": token,
+        "evidence_summary_json": evidence_text,
+        "updated_at": str(request_time),
+        "reply": str(reply),
+    }
+```
 
-| 节点 | 输入 | 输出 |
-|---|---|---|
-| 多表读取 | `uid,plan_id` | 各自 `outputList` |
-| 证据汇总 | 任务/履历/习惯记录 | `evidence_summary_json` |
-| 复盘大模型 | 主规划、证据、用户输入 | `growth_review_json` |
-| 保存复盘 | uid、review_id、校验 JSON | `isSuccess` |
-| 结束 | `result_json` | `output` |
+输出区声明 `review_valid:Boolean`，以及 `review_error/review_id/plan_id/review_json/recommendation_type/pending_change_json/confirmation_token/evidence_summary_json/updated_at/reply:String`。N12：true → N13，false → N27。
 
-调试正常证据、全部可选证据为空、任务读取失败、建议切换四种情况；建议切换时确认 DB-07 有 pending change，而 DB-05 未被直接覆盖。
+## 7. N13/N14：新增复盘记录
+
+N13 表单新增 `growth_reviews`：映射 N11 的 `review_id/plan_id/review_json/recommendation_type/pending_change_json/confirmation_token/evidence_summary_json/updated_at`；页面强制 uid 时引用 N00/uid。
+
+N14：`N13/isSuccess == true`；是 → N15，否 → N28。
+
+## 8. N15～N19：回读并按建议类型分流
+
+N15 自定义 SQL，输入 uid、review_id：
+
+```sql
+SELECT review_id, review_json, recommendation_type, pending_change_json,
+       confirmation_token, evidence_summary_json, updated_at
+FROM growth_reviews
+WHERE uid='{{uid}}' AND review_id='{{review_id}}'
+ORDER BY updated_at DESC LIMIT 1;
+```
+
+`review_id` 引用 N11/review_id。N16：`N15/isSuccess == true`；是 → N17，否 → N29。
+
+N17 输入 `expected=N11/review_json`、`outputList=N15/outputList`：
+
+```python
+def main(expected, outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    stored = str(row.get("review_json", ""))
+    return {"readback_matches": len(stored.strip()) > 2 and stored.strip() == str(expected).strip(), "stored_review_json": stored}
+```
+
+输出 `readback_matches:Boolean`、`stored_review_json:String`。N18：true → N19，false → N29。
+
+N19 为 `N11/recommendation_type` 添加三条固定值分支：continue→N20、adjust→N21、consider_switch→N22；默认→N27。
+
+## 9. 消息节点和结束
+
+| 节点 | 输入和回答内容 |
+|---|---|
+| N20 | `reply=N11/reply`、`review=N17/stored_review_json`；`{{reply}}\n{{review}}\n建议：继续当前主规划，按复盘点再检查。` |
+| N21 | 再输入 `change=N11/pending_change_json`、`token=N11/confirmation_token`；说明“这是任务微调草稿，未修改任务；确认后进入 WF-07”，展示 token |
+| N22 | 同上；说明“这是路径切换建议，未修改主规划；确认后进入 WF-06” |
+| N23 | `没有找到指定 active 主规划，请先在 WF-06 确认主规划。` |
+| N24 | 引用 N01/message：主规划读取失败 |
+| N25 | 引用 N05/message：任务证据读取失败 |
+| N26 | 引用 N07/question_for_user：信息不足追问 |
+| N27 | 引用 N11/review_error：复盘结构无效，未保存 |
+| N28 | 引用 N13/message：复盘生成但写入失败 |
+| N29 | 引用 N15/message：写入后回读不一致，不能说已保存 |
+
+所有消息连接 N30。N30：`output｜输入｜workflow_finished`；回答内容“本轮处理已结束，请以上方消息节点的提示为准。”；流式关闭。
+
+## 10. 调试指南
+
+1. 有 active 规划和任务：应写 DB-07 并回读。
+2. 无任务但用户提供详细事实：N07 可以判定信息足够；证据必须标为用户自述。
+3. 无任务且输入过短：到 N26，不调用模型。
+4. continue：不产生需要执行的正式变更。
+5. adjust：只展示 pending_change 和 token，不直接改 DB-06。
+6. consider_switch：只引导 WF-06，不直接改 DB-05。
+7. 写入/回读失败：到 N28/N29，不说已保存。
+
+## 11. 验收清单
+
+- [ ] 复盘、证据和推断明确区分。
+- [ ] 本工作流只写 growth_reviews，不直接改主规划/任务。
+- [ ] 写入后回读一致才进入 N19。
+- [ ] 三种 recommendation_type 都有明确终点。
+- [ ] 所有代码无 import、输出声明完整。

@@ -1,261 +1,316 @@
-# WF-09 履历条目生成搭建指南
+# WF-09 履历条目生成与确认：逐节点搭建指南
 
-## 1. 目标与调用时机
+> WF-09 必须先生成 pending 履历草稿，用户第二轮明确确认且 token 匹配后才写正式 `resume_entry_json`。任何“帮我编一段不存在的经历”都走安全出口。
 
-把用户的一段经历整理为“行动—方法—结果”式结构化履历，产出 `resume_entry_json`。用户说“帮我写简历”“这个项目能不能存进履历”等时由主 Agent 调用。重要履历必须先展示草稿，收到“确认保存这条履历”等明确确认后才写入；缺少指标或证据时如实标记，不得编造。
+## 1. 数据表和开始输入
 
-## 2. 搭建前准备
+在 `university` 上传 [DB-08 resume_entries](../database/import-templates/DB-08-resume-entries.xlsx)，保留 `id/uid/create_time`。
 
-- 开始输入：`AGENT_USER_INPUT`、`uid`、`session_id`、可选 `context_json`、`confirm_action`、`confirmation_token`；token 由主 Agent 或平台生成，不由大模型编造。
-- 存储实体：`resume_entries`；至少含共享协议规定的审计字段，`data_json` 存本指南定义的条目。
-- 若需参考措辞，可准备简历范例知识库；知识库不可替代用户事实。
-- 数据库字段、成功标志和回读按钮均按本文件逐栏配置。不支持数据库时改用“长期记忆写入/长期记忆检索”；无法确认用户隔离时只运行无写入版。
+N00 输入：
 
-## 3. 最小可运行版
+| 变量 | 类型 | 必填 | 调试值 |
+|---|---|---:|---|
+| `AGENT_USER_INPUT` | String | 是 | 首轮描述真实经历；次轮“确认保存这条履历” |
+| `uid` | String | 是 | `test_user_001` |
+| `confirmation_token` | String | 否 | 第二轮填写第一轮 token |
+| `evidence_location` | String | 否 | 证明材料位置或链接 |
+| `request_time` | String | 是 | `2026-07-19 19:00:00` |
 
-```text
-开始 → 大模型（生成履历草稿）→ 结束
-```
-
-从左侧拖入一个“大模型”，放在“开始”右侧，再把“结束”放在其右侧；依次连线。将大模型重命名为“生成履历草稿”。开始节点选择 `AGENT_USER_INPUT`，结束节点输出大模型文本。此版只证明能生成草稿，`status` 必须为 `draft`，不得声称已保存。
-
-## 4. 完整业务版画布
-
-![WF-09 履历条目生成完整业务版](images/WF-09-resume-entry.png)
+## 2. 分段流程图
 
 ```mermaid
 flowchart LR
-  S[N00 开始] --> CM{N01 分支器：是否为确认轮}
-  CM -- 是 --> PR[N02 数据库：读取 pending_resume_draft] --> TC{N03 分支器：token 与 confirm_action 是否匹配}
-  TC -- 否 --> CI[N04 消息：确认无效或草稿过期] --> Z[N05 结束]
-  TC -- 是 --> W[N06 数据库：写入履历]
-  CM -- 否 --> R[N07 数据库：读取同类履历]
-  R --> E[N08 大模型：提取履历事实]
-  E --> X[N09 变量提取器：提取履历字段]
-  X --> U{N10 分支器：是否为伪造请求}
-  U -- 是 --> US[N11 消息：拒绝伪造并帮助真实改写] --> Z
-  U -- 否 --> V[N12 代码：校验履历字段]
-  V --> D{N13 分支器：字段是否可生成}
-  D -- 否 --> Q[N14 消息：追问缺失信息] --> Z[N05 结束]
-  D -- 是 --> G[N15 大模型：生成履历草稿]
-  G --> GX[N16 变量提取器：提取最终履历] --> GV[N17 代码：校验最终履历] --> GD{N18 分支器：最终草稿是否有效}
-  GD -- 否 --> GF[N19 消息：草稿解析失败] --> Z
-  GD -- 是 --> PW[N20 数据库：保存 pending_resume_draft] --> P[N21 消息：展示草稿与 confirmation_token] --> Z
-  W --> K{N22 分支器：写入是否成功}
-  K -- 否 --> F[N23 消息：写入失败] --> Z
-  K -- 是 --> O[N24 消息：保存成功] --> Z
+    N00["N00 开始"] --> N01["N01 数据库：读取最新 pending 履历"]
+    N01 --> N02{"N02 分支器：读取成功？"}
+    N02 -->|否| N33["N33 消息：读取失败"]
+    N02 -->|是| N03["N03 代码：整理 pending"]
+    N03 --> N04["N04 变量提取器：识别动作和经历类型"]
+    N04 --> N05{"N05 分支器：requested_action"}
+    N05 -->|draft/modify| N06["N06 数据库：读取同类履历"]
+    N05 -->|confirm| N21["N21 代码：校验确认 token"]
+    N05 -->|cancel| N29["N29 数据库：取消 pending"]
+    N33 --> N42["N42 公共结束"]
 ```
 
-```text
-开始 → 分支器（是否为确认轮）
-├─ 是 → 数据库（读取 pending_resume_draft）→ 分支器（token 与 confirm_action 是否匹配）
-│  ├─ 否 → 消息（确认无效或草稿已过期）→ 结束
-│  └─ 是 → 数据库（写入履历）→ 分支器（写入是否成功）→ 消息 → 结束
-└─ 否 → 数据库（读取同类履历）→ 大模型（提取履历事实）→ 变量提取器（提取履历字段）→ 分支器（是否为伪造请求）
-├─ 是 → 消息（拒绝伪造并帮助真实改写）→ 结束
-└─ 否 → 代码（校验履历字段）→ 分支器（字段是否可生成）
-├─ 否 → 消息（追问缺失信息）→ 结束
-└─ 是 → 大模型（生成履历草稿）→ 变量提取器（提取最终履历）→ 代码（校验最终履历）→ 分支器（最终草稿是否有效）
-   ├─ 否 → 消息（草稿解析失败）→ 结束
-   └─ 是 → 数据库（保存 pending_resume_draft）→ 消息（展示草稿与 confirmation_token）→ 结束
+```mermaid
+flowchart LR
+    N06 --> N07{"N07 分支器：同类履历读取成功？"}
+    N07 -->|否| N34["N34 消息：同类履历读取失败"]
+    N07 -->|是| N08["N08 大模型：提取真实履历事实"]
+    N08 --> N09["N09 变量提取器：提取事实字段"]
+    N09 --> N10{"N10 分支器：伪造请求？"}
+    N10 -->|是| N11["N11 消息：拒绝伪造"]
+    N10 -->|否| N12["N12 代码：校验事实"]
+    N12 --> N13{"N13 分支器：事实足够？"}
+    N13 -->|否| N14["N14 消息：追问缺失事实"]
+    N13 -->|是| N15["N15 大模型：生成履历草稿"]
+    N15 --> N16["N16 变量提取器：提取最终履历"]
+    N16 --> N17["N17 代码：校验并准备 pending 行"]
+    N17 --> N18{"N18 分支器：草稿有效？"}
+    N18 -->|否| N35["N35 消息：草稿无效"]
+    N18 -->|是| N19["N19 数据库：新增 pending 履历"]
+    N19 --> N20{"N20 分支器：pending 保存成功？"}
+    N20 -->|是| N36["N36 消息：展示草稿和 token"]
+    N20 -->|否| N37["N37 消息：草稿未保存"]
+    N11 --> N42["N42 公共结束"]
+    N14 --> N42
+    N34 --> N42
+    N35 --> N42
+    N36 --> N42
+    N37 --> N42
 ```
 
-## 5. 节点清单与逐步拖拽连线
-
-拖入 4 个“数据库”、2 个“大模型”、2 个“变量提取器”、2 个“代码”、6 个“分支器”、7 个“消息”和各 1 个“开始/结束”。从左到右按上图重命名并逐一连接；确认轮从开始处分流，不连接任何生成节点。
-
-若数据库节点无法返回同类记录，可删除“读取同类履历”，将开始直接连到“提取履历事实”。若平台“分支器”只能判断单值，分别以 `validation_ok`、`confirmation_ok`、`write_ok` 为条件。
-
-## 6. 实际节点配置与变量映射
-
-| 节点 | 输入 | 配置/条件 | 输出 |
-|---|---|---|---|
-| 开始 | 平台输入 | `AGENT_USER_INPUT` 必选，其余由主 Agent 传入 | 同名变量 |
-| 是否为确认轮 | `confirm_action`,`confirmation_token` | 两者均非空走确认轮 | 分支 |
-| 读取 pending_resume_draft | `uid + confirmation_token` | 只回读该用户未过期、已校验的待确认草稿 | `pending_resume_draft` |
-| token 与 confirm_action 是否匹配 | pending、用户、token 均匹配且动作是 `confirm_resume_entry` | `confirmation_ok` |
-| 读取同类履历 | `uid` | 按 `uid` 查询 `resume_entries`，禁止跨用户 | `existing_entries_json` |
-| 提取履历事实 | 用户输入、上下文 | 使用下方提示词 A | `facts_text` |
-| 是否为伪造请求 | `unsafe_request` | 为真时返回 `unsafe_request` 并结束 | 分支 |
-| 提取履历字段 | `facts_text` | 提取 JSON 字段 | `resume_entry_json` |
-| 校验履历字段 | `resume_entry_json` | 运行代码 B | `validation_ok`,`missing_fields`,`quality_status` |
-| 字段是否可生成 | `validation_ok` | 等于 `true` 走是分支 | 分支 |
-| 生成履历草稿 | 已校验 JSON | 使用提示词 C | `draft_result_json` |
-| 提取最终履历 | `draft_result_json` | 提取 `data.resume_entry_json` | `final_resume_entry_json` |
-| 校验最终履历 | `final_resume_entry_json` | 运行代码 B，并检查 `bullet` 非空 | `validated_resume_entry_json`,`final_validation_ok` |
-| 最终草稿是否有效 | `final_validation_ok` | 为假进入解析失败且禁止写入 | 分支 |
-| 保存 pending_resume_draft | `validated_resume_entry_json` | 保存校验后草稿、用户、token、`awaiting_confirmation`；不写正式履历 | `pending_resume_draft` |
-| 写入履历 | `uid`,`validated_resume_entry_json` | 只写校验后的 `resume_entry_json`，新条目追加而非覆盖 | `write_result` |
-| 写入是否成功 | 写入返回 | 成功标志为真；无稳定标志则增加数据库回读比较版本 | `write_ok` |
-| 结束 | 各分支结果 | 输出统一 `result_json` | `result_json` |
-
-建议条目结构：
-
-```json
-{"entry_id":"","experience_type":"项目","organization":"","background":"","goal":"","role":"","actions":[],"tools":[],"result":"","metrics":[],"evidence_location":"","quality_status":"需要打磨","bullet":"","fact_basis":"user_reported"}
+```mermaid
+flowchart LR
+    N21 --> N22{"N22 分支器：确认有效？"}
+    N22 -->|否| N38["N38 消息：确认无效"]
+    N22 -->|是| N23["N23 数据库：写入正式履历"]
+    N23 --> N24{"N24 分支器：写入成功？"}
+    N24 -->|否| N39["N39 消息：正式写入失败"]
+    N24 -->|是| N25["N25 数据库：回读正式履历"]
+    N25 --> N26{"N26 分支器：回读 SQL 成功？"}
+    N26 -->|否| N40["N40 消息：回读失败"]
+    N26 -->|是| N27["N27 代码：比较回读"]
+    N27 --> N28{"N28 分支器：回读一致？"}
+    N28 -->|是| N41["N41 消息：保存成功"]
+    N28 -->|否| N40
+    N38 --> N42["N42 公共结束"]
+    N39 --> N42
+    N40 --> N42
+    N41 --> N42
 ```
 
-## 7. 可复制提示词与代码
+取消：N29→N30“取消成功？”→N31 成功或 N32 失败。所有消息连接 N42 结束。
 
-### 提示词 A：提取履历事实
-
-```text
-你是履历事实整理助手。先判断用户是否要求编造或夸大不存在的经历、职责、结果或数字；若是，unsafe_request=true，否则为 false。只根据用户原话和明确提供的 context_json 提取：经历类型、组织/项目、背景、目标、职责、行动、工具、结果、量化指标、证明材料位置。未知字段用空字符串或空数组，不推测、不补造数字，不把范例知识当成用户事实。输出单个合法 JSON 对象，必须包含 unsafe_request，不要 Markdown。
-用户输入：{{AGENT_USER_INPUT}}
-上下文：{{context_json}}
+```mermaid
+flowchart LR
+    N29["N29 数据库：取消 pending"] --> N30{"N30 分支器：取消成功？"}
+    N30 -->|是| N31["N31 消息：已取消"] --> N42["N42 公共结束"]
+    N30 -->|否| N32["N32 消息：取消失败"] --> N42
 ```
 
-### 代码 B：字段校验（Python）
+## 3. N01～N03：读取 pending 履历
 
-输入区配置 `resume_entry_json｜引用｜变量提取器/resume_entry_json`；输出区声明 `validation_ok:Boolean`、`missing_fields:Array<String>`、`quality_status:String`、`resume_entry_json:Object`：
+N01 自定义 SQL，输入 `uid=N00/uid`：
+
+```sql
+SELECT id, entry_id, entry_type, resume_entry_json, pending_entry_json,
+       confirmation_token, quality_status, evidence_location,
+       record_status, updated_at
+FROM resume_entries
+WHERE uid='{{uid}}' AND record_status='pending'
+ORDER BY updated_at DESC, create_time DESC
+LIMIT 1;
+```
+
+N02：`N01/isSuccess == true`；是 → N03，否 → N33。
+
+N03 输入 outputList：
 
 ```python
-import json
-
-
-def main(resume_entry_json):
-    try:
-        value = json.loads(resume_entry_json) if isinstance(resume_entry_json, str) else resume_entry_json
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {
-            "validation_ok": False,
-            "missing_fields": ["json_invalid"],
-            "quality_status": "需要打磨",
-            "resume_entry_json": {},
-        }
-    required = ["experience_type", "actions"]
-    missing_fields = [key for key in required if not value.get(key)]
-    quality_status = "可直接使用"
-    if not value.get("result"):
-        quality_status = "需要打磨"
-    elif not isinstance(value.get("metrics"), list) or not value["metrics"]:
-        quality_status = "缺少量化结果"
-    elif not value.get("evidence_location"):
-        quality_status = "缺少证明材料"
-    value["quality_status"] = quality_status
+def main(outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
     return {
-        "validation_ok": not missing_fields,
-        "missing_fields": missing_fields,
-        "quality_status": quality_status,
-        "resume_entry_json": value,
+        "has_pending": len(row) > 0,
+        "pending_record_id": int(row.get("id", 0)) if str(row.get("id", "0")).isdigit() else 0,
+        "pending_entry_id": str(row.get("entry_id", "")),
+        "pending_entry_json": str(row.get("pending_entry_json", "{}")),
+        "stored_confirmation_token": str(row.get("confirmation_token", "")),
     }
 ```
 
-### 提示词 C：生成草稿
+输出 `has_pending:Boolean`、`pending_record_id:Integer`、`pending_entry_id:String`、`pending_entry_json:String`、`stored_confirmation_token:String`。
+
+## 4. N04/N05：识别动作和经历类型
+
+N04 输入 `user_input=N00/AGENT_USER_INPUT`、`has_pending=N03/has_pending`，输出：
+
+| 变量 | 类型 | 描述 |
+|---|---|---|
+| `requested_action` | String | draft/modify/confirm/cancel |
+| `entry_type` | String | 项目、科研、竞赛、实习、社团、学生工作、志愿服务或其他 |
+| `action_reason` | String | 判断依据 |
+
+N05 分支：draft→N06、modify→N06、confirm→N21、cancel→N29，默认→N14。
+
+## 5. N06/N07：读取同类正式履历
+
+N06 自定义 SQL，输入 `uid=N00/uid`、`entry_type=N04/entry_type`：
+
+```sql
+SELECT entry_id, entry_type, resume_entry_json, quality_status,
+       evidence_location, updated_at
+FROM resume_entries
+WHERE uid='{{uid}}' AND entry_type='{{entry_type}}' AND record_status='confirmed'
+ORDER BY updated_at DESC LIMIT 20;
+```
+
+N07：`N06/isSuccess == true`；是 → N08，否 → N34。空数组可以继续，仅用于避免重复。
+
+## 6. N08 大模型和 N09 提取器：提取事实
+
+N08 模型 `Spark4.0 Ultra`，关闭对话历史。输入 `user_input=N00/AGENT_USER_INPUT`、`entry_type=N04/entry_type`、`existing_entries=N06/outputList`。
+
+系统提示词：
 
 ```text
-把以下已校验事实写成一条简洁的中文简历 bullet，优先采用“行动 + 方法/工具 + 结果”结构。不得虚构指标；无结果时写已完成的动作，并明确待补信息。输出统一 result_json：workflow_id=WF-09，version=1.0，status=awaiting_confirmation，data.resume_entry_json 含原字段和 bullet，suggested_writes 仅列本条履历，next_action=confirm_resume_entry，error=null。提醒用户回复“确认保存这条履历”或提出修改。
-事实：{{resume_entry_json}}
+你是履历事实提取助手。只能提取用户明确提供的事实，禁止补造组织名、角色、数字、奖项、技术和影响。若用户要求伪造，is_fabrication_request=true。事实字段包括背景、目标、本人行动、工具方法、协作对象、结果、量化数据、证据位置和缺失项。
+只输出 JSON：
+{"is_fabrication_request":false,"facts":{},"missing_fields":[],"followup_question":""}
 ```
 
-`draft_result_json` 不能直接写正式履历。只有 `final_validation_ok=true` 才保存为 `pending_resume_draft`。首轮 `result_json.status=awaiting_confirmation`、`next_action=confirm_resume_entry` 并返回 `confirmation_token`。下一轮只回读 pending；确认成功后才写其中的 `validated_resume_entry_json`，不再运行生成节点。
+用户提示词：`用户原话：{{user_input}}\n类型：{{entry_type}}\n已有同类履历：{{existing_entries}}`。输出 `output:String`。
 
-确认轮写入成功返回 `result_json.status=write_succeeded`、`data.resume_entry_json=pending_resume_draft.validated_resume_entry_json`、`next_action=none`；失败返回 `write_failed`，不能把本轮用户文字重新生成成履历。
+N09 输入 `input=N08/output`，输出 `is_fabrication_request:Boolean`、`facts_json:String`、`background:String`、`action:String`、`result:String`、`metrics:Array`、`missing_fields:Array`、`followup_question:String`。
 
-## 8. 确认、安全出口与写入失败
+## 7. N10～N14：安全和事实门禁
 
-- 确认必须跨轮：下一轮同时传 `confirm_action=confirm_resume_entry` 与首次返回的 `confirmation_token`；“好的/继续”、同轮确认、token 不匹配或 pending 过期均不得写入。
-- 用户要求夸大、伪造经历或数字时，返回 `unsafe_request`，可帮助改写真实事实但不写假内容。
-- `uid` 缺失时禁止写入。数据库报错、无成功标志或回读不一致，返回 `status=write_failed`、`next_action=retry_resume_write`，回复必须写“未保存成功”。
+N10：`N09/is_fabrication_request == true`；是 → N11，否 → N12。
 
-## 9. 调试与验收清单
+N11 回答：`我不能替你编造不存在的经历、数据或奖项。可以把真实做过的事情、你的具体行动和已有证据告诉我，我会帮你如实改写。`，接 N42。
 
-成功输入：“我在校媒负责迎新推文，采访 6 名新生，用秀米排版，阅读量 3200，材料在网盘/校媒/迎新。”预期生成含行动、工具、指标、证据的草稿；确认前数据库不变，确认后回读一致。
+N12 输入 `background/action/result/metrics/missing_fields/followup_question`：
 
-失败输入：“帮我编一个大厂实习。”预期拒绝虚构且不写入。再模拟数据库失败，检查没有“已保存”。
-
-- [ ] 最小版输出 `draft`，完整版产出 `resume_entry_json`。
-- [ ] 八类事实均有字段，缺失值没有被编造。
-- [ ] 用户确认前无写入；写入失败返回 `write_failed`。
-- [ ] 两个 `uid` 的履历互不可见。
-- [ ] 下游 WF-08 可从 `resume_entries` 读取行为证据，主 Agent 可把完成结果交给 WF-12。
-
-## 节点逐项配置
-
-<!-- GENERATED-NODE-LEDGER:START -->
-### 画布节点连线与页面输入输出总表
-
-本表由流程图生成，用于防止漏连。‘直接上游’决定页面引用下拉框中可选的数据来源；具体变量名以本文件后续业务映射表为准。
-开始节点类型规则：`uid/session_id/AGENT_USER_INPUT` 及所有 `*_json/*_token/*_id` 均选 String；计数、天数选 Integer；真伪开关选 Boolean。表中未特别标注的输入一律选 String，JSON 作为字符串传递。
-
-| 节点 | 类型 | 直接上游（输入来源） | 固定/声明输出 | 直接下游 |
-|---|---|---|---|---|
-| `S` N00 开始 | 开始 | 无（起点） | 开始节点中声明的同名变量 | CM |
-| `CM` N01 分支器：是否为确认轮 | 分支器 | S | 不产生业务变量；按条件输出连线 | PR（是）、R（否） |
-| `PR` N02 数据库：读取 pending_resume_draft | 数据库 | CM | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | TC |
-| `TC` N03 分支器：token 与 confirm_action 是否匹配 | 分支器 | PR | 不产生业务变量；按条件输出连线 | CI（否）、W（是） |
-| `CI` N04 消息：确认无效或草稿过期 | 消息 | TC | 不新增业务变量；回答内容引用上游变量 | Z |
-| `Z` N05 结束 | 结束 | CI、US、Q、GF、P、F、O | `output` 引用上游最终结果 | 无；必须在正文说明为何终止或转入下一张图 |
-| `W` N06 数据库：写入履历 | 数据库 | TC | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | K |
-| `R` N07 数据库：读取同类履历 | 数据库 | CM | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | E |
-| `E` N08 大模型：提取履历事实 | 大模型 | R | `output:String` | X |
-| `X` N09 变量提取器：提取履历字段 | 变量提取器 | E | `resume_entry_json:String`（仅含用户事实的履历字段 JSON） | U |
-| `U` N10 分支器：是否为伪造请求 | 分支器 | X | 不产生业务变量；按条件输出连线 | US（是）、V（否） |
-| `US` N11 消息：拒绝伪造并帮助真实改写 | 消息 | U | 不新增业务变量；回答内容引用上游变量 | Z |
-| `V` N12 代码：校验履历字段 | 代码 | U | 与 Python `main()` 返回 dict 的键完全一致 | D |
-| `D` N13 分支器：字段是否可生成 | 分支器 | V | 不产生业务变量；按条件输出连线 | Q（否）、G（是） |
-| `Q` N14 消息：追问缺失信息 | 消息 | D | 不新增业务变量；回答内容引用上游变量 | Z |
-| `G` N15 大模型：生成履历草稿 | 大模型 | D | `output:String` | GX |
-| `GX` N16 变量提取器：提取最终履历 | 变量提取器 | G | `final_resume_entry_json:String`（润色后待校验履历 JSON） | GV |
-| `GV` N17 代码：校验最终履历 | 代码 | GX | 与 Python `main()` 返回 dict 的键完全一致 | GD |
-| `GD` N18 分支器：最终草稿是否有效 | 分支器 | GV | 不产生业务变量；按条件输出连线 | GF（否）、PW（是） |
-| `GF` N19 消息：草稿解析失败 | 消息 | GD | 不新增业务变量；回答内容引用上游变量 | Z |
-| `PW` N20 数据库：保存 pending_resume_draft | 数据库 | GD | `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>` | P |
-| `P` N21 消息：展示草稿与 confirmation_token | 消息 | PW | 不新增业务变量；回答内容引用上游变量 | Z |
-| `K` N22 分支器：写入是否成功 | 分支器 | W | 不产生业务变量；按条件输出连线 | F（否）、O（是） |
-| `F` N23 消息：写入失败 | 消息 | K | 不新增业务变量；回答内容引用上游变量 | Z |
-| `O` N24 消息：保存成功 | 消息 | K | 不新增业务变量；回答内容引用上游变量 | Z |
-<!-- GENERATED-NODE-LEDGER:END -->
-
-> 本节必须与[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)一起使用。先按流程图编号拖入节点并连线，再配置节点；未连线时下游“引用”下拉框会显示暂无数据。
-
-### 本工作流所有节点的页面填写顺序
-
-1. **开始**：按下方开始输入表逐行“+ 添加”，变量名、类型和必填状态照表填写。
-2. **自定义 SQL 数据库**：输入参数选择引用；读取结果只使用固定输出 `isSuccess:Boolean`、`message:String`、`outputList:Array<Object>`。
-3. **表单新增/更新数据库**：选择 `university / 目标表`；新增在“设置新增数据”逐字段添加，更新先在“设置数据范围”配置 AND 条件，再在“设置更新数据”逐字段添加；固定输出仍为 `isSuccess/message/outputList`。
-4. **大模型**：输入参数名与 `{{变量名}}` 完全一致；系统提示词放角色、规则和 JSON 结构，用户提示词只放本轮变量；输出 `output:String`。
-5. **变量提取器**：输入固定为 `input｜引用｜上游大模型/output`；每个输出必须填写变量名、类型和提取描述，复杂 JSON 先用 String。
-6. **代码**：仅使用 Python `def main(...): return {...}`；输入名与形参一致，输出区声明每个返回键及类型。
-7. **分支器**：左侧选上游变量，条件选“等于”等操作；与字面量比较时比较类型选常量/固定值；每条分支和默认分支都必须连接。
-8. **消息**：输入区引用需要展示的变量，在“回答内容”用 `{{变量名}}`；流式输出关闭；消息后连接共享结束。
-9. **结束**：回答模式选“返回设定格式配置的回答”，输出设置 `output｜引用｜上游最终结果`。所有成功、失败、待补充消息都进入同一个结束节点。
-
-本节的通用点击位置、建表入口、导入按钮和数据库节点输出解释见[数据库从零教程](../database/README.md)；请先完成该教程，再按本节配置当前 WF。
-
-### 准备和输入
-
-创建 `resume_entries`，上传 [DB-08-resume-entries.xlsx](../database/import-templates/DB-08-resume-entries.xlsx)；需要任务证据时同时使用 DB-06。
-
-| 输入 | 来源 | 示例 |
-|---|---|---|
-| `AGENT_USER_INPUT` | 开始节点 | `把我完成的校园网站项目写成简历条目`；确认轮 `确认保存这条履历` |
-| `uid` | 主 Agent | `test_user_001` |
-| `session_id` | 主 Agent/会话上下文 | `SESSION-TEST-001` |
-| `context_json` | 上游工作流/共享状态 | 可选，相关任务或项目事实 |
-| `entry_type` | 变量提取器 | `项目` |
-| `confirm_action` | 总流程/变量提取器 | `none/modify/confirm/cancel` |
-| `confirmation_token` | 首轮结束输出 | 确认轮原样传回 |
-
-查询同类履历：
-
-```sql
-SELECT * FROM resume_entries
-WHERE uid='{{uid}}' AND entry_type='{{entry_type}}'
-ORDER BY updated_at DESC;
+```python
+def main(background, action, result, metrics, missing_fields, followup_question):
+    missing = missing_fields if isinstance(missing_fields, list) else []
+    errors = []
+    if not str(background).strip(): errors.append("背景")
+    if not str(action).strip(): errors.append("本人行动")
+    if not str(result).strip(): errors.append("结果")
+    return {
+        "facts_enough": len(errors) == 0,
+        "facts_error": "、".join(errors),
+        "quality_status": "缺量化" if not isinstance(metrics, list) or len(metrics) == 0 else ("需打磨" if len(missing) > 0 else "可用"),
+        "followup_question": str(followup_question),
+    }
 ```
 
-首轮生成和二次校验成功后，只在 `resume_entries` 新增 `pending_entry_json,confirmation_token,record_status=pending`；不得写 `resume_entry_json`。确认轮用 `uid + confirmation_token` 查询 pending：
+输出 `facts_enough:Boolean`、`facts_error:String`、`quality_status:String`、`followup_question:String`。N13：true → N15，false → N14。N14 输入 `error/followup`，回答 `还缺少：{{error}}。{{followup}}`，连接 N42。
+
+## 8. N15～N18：生成并校验履历草稿
+
+N15 大模型输入 `entry_type=N04/entry_type`、`facts_json=N09/facts_json`、`quality_status=N12/quality_status`。系统提示词：
+
+```text
+你是简历写作助手。严格依据 facts_json，使用“情境—任务—行动—结果—证据”结构，突出本人行动；没有量化数据就明确写缺量化，不得编数字。输出中文简历版、详细素材版、证据清单和仍需补充项。
+只输出 JSON：
+{"entry_type":"","resume_bullet":"","detailed_story":"","evidence":[],"missing_fields":[],"quality_status":"","reply":""}
+```
+
+用户提示词：`类型：{{entry_type}}\n事实：{{facts_json}}\n质量标签：{{quality_status}}`。输出 `output:String`。
+
+N16 输入 `input=N15/output`，输出 `resume_entry_json:String`、`resume_bullet:String`、`detailed_story:String`、`evidence:Array`、`missing_fields:Array`、`quality_status:String`、`reply:String`。
+
+N17 输入 `uid=N00/uid`、`request_time=N00/request_time`、`entry_type=N04/entry_type`、`evidence_location=N00/evidence_location` 和 N16 全部：
+
+```python
+def main(uid, request_time, entry_type, evidence_location, resume_entry_json, resume_bullet, detailed_story, evidence, missing_fields, quality_status, reply):
+    errors = []
+    text = str(resume_entry_json).strip()
+    if not text.startswith("{") or not text.endswith("}"): errors.append("resume_entry_json 无效")
+    if not str(resume_bullet).strip(): errors.append("缺少 resume_bullet")
+    if not str(detailed_story).strip(): errors.append("缺少 detailed_story")
+    if str(quality_status) not in ["可用", "缺量化", "缺证明", "需打磨"]: errors.append("quality_status 无效")
+    token = str(uid) + "-RESUME-" + str(request_time)
+    return {
+        "draft_valid": len(errors) == 0,
+        "draft_error": ";".join(errors),
+        "entry_id": str(uid) + "-ENTRY-" + str(request_time),
+        "entry_type": str(entry_type),
+        "resume_entry_json_empty": "{}",
+        "pending_entry_json": text,
+        "confirmation_token": token,
+        "quality_status": str(quality_status),
+        "evidence_location": str(evidence_location),
+        "record_status": "pending",
+        "updated_at": str(request_time),
+        "reply": str(reply),
+    }
+```
+
+输出 `draft_valid:Boolean`，以及 `draft_error/entry_id/entry_type/resume_entry_json_empty/pending_entry_json/confirmation_token/quality_status/evidence_location/record_status/updated_at/reply:String`。N18：true → N19，false → N35。
+
+## 9. N19/N20：新增 pending 履历
+
+N19 表单新增 `resume_entries`，映射 `entry_id/entry_type/resume_entry_json_empty→resume_entry_json/pending_entry_json/confirmation_token/quality_status/evidence_location/record_status/updated_at`；页面强制 uid 时引用 N00/uid。
+
+N20：`N19/isSuccess == true`；是 → N36，否 → N37。
+
+N36 输入 plan/token/reply，回答：`{{reply}}\n\n草稿：{{pending_entry_json}}\n\n确认保存请明确回复“确认保存这条履历”，并提交 token：{{confirmation_token}}`。N37 说明草稿生成但未保存，不能进入确认。
+
+## 10. N21/N22：确认 token
+
+N21 输入 `requested_action=N04/requested_action`、`has_pending=N03/has_pending`、`input_token=N00/confirmation_token`、`stored_token=N03/stored_confirmation_token`：
+
+```python
+def main(requested_action, has_pending, input_token, stored_token):
+    valid = requested_action == "confirm" and has_pending is True and str(input_token) != "" and str(input_token) == str(stored_token)
+    return {"confirm_valid": valid, "confirm_error": "" if valid else "没有 pending 草稿、动作不明确或 token 不匹配"}
+```
+
+输出 `confirm_valid:Boolean`、`confirm_error:String`。N22：true → N23，false → N38。
+
+## 11. N23～N28：写入并回读正式履历
+
+N23 表单更新 `resume_entries`。范围：`id=N03/pending_record_id` AND `uid=N00/uid` AND `confirmation_token=N03/stored_confirmation_token`。更新：
+
+- `resume_entry_json=N03/pending_entry_json`
+- `pending_entry_json={}`
+- `confirmation_token=空字符串`
+- `record_status=confirmed`
+- `updated_at=N00/request_time`
+
+N24：`N23/isSuccess == true`；是 → N25，否 → N39。
+
+N25 自定义 SQL，输入 uid、entry_id=N03/pending_entry_id：
 
 ```sql
-SELECT * FROM resume_entries
-WHERE uid='{{uid}}' AND confirmation_token='{{confirmation_token}}'
-  AND record_status='pending'
+SELECT entry_id, resume_entry_json, record_status, quality_status, updated_at
+FROM resume_entries
+WHERE uid='{{uid}}' AND entry_id='{{entry_id}}' AND record_status='confirmed'
 ORDER BY updated_at DESC LIMIT 1;
 ```
 
-确认有效后按系统 `id` 更新 `resume_entry_json,quality_status,evidence_location,record_status=confirmed,updated_at`，检查数据库输出 `isSuccess`；成功后再按 `uid + entry_id` 回读。`isSuccess=false` 时使用 `message` 返回 `write_failed`，不得声称履历已保存。
+N26：`N25/isSuccess == true`；是 → N27，否 → N40。
 
-节点链：开始输入 → 是否确认轮 → 查询 pending/查询同类 → 大模型 → 提取和两次校验 → 保存 pending → 结束；确认轮直接读取 pending → 正式写入 → 回读 → 结束。结束节点选择统一 `result_json`，不是数据库 `outputList`。
+N27 输入 expected=N03/pending_entry_json、outputList=N25/outputList：
 
-调试：新建草稿、错误 token、有效确认、伪造请求安全出口和数据库失败。最后在 DB-08 筛选 `uid=test_user_001`，确认只有经确认记录的 `record_status=confirmed`。
+```python
+def main(expected, outputList):
+    rows = outputList if isinstance(outputList, list) else []
+    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+    stored = str(row.get("resume_entry_json", ""))
+    return {"readback_matches": len(stored.strip()) > 2 and stored.strip() == str(expected).strip(), "stored_entry_json": stored}
+```
+
+输出 `readback_matches:Boolean`、`stored_entry_json:String`。N28：true → N41，false → N40。N41 展示 `stored_entry_json` 并明确“已保存并回读确认”。
+
+## 12. 取消和错误消息
+
+N29 表单更新 pending 行：范围 id+uid；更新 `pending_entry_json={}`、`confirmation_token=空`、`record_status=archived`、`updated_at=request_time`。N30 检查 isSuccess；是 → N31“已取消，未写正式履历”，否 → N32。
+
+N33～N40 分别展示对应节点 message/error：读取 pending 失败、读取同类失败、草稿无效、pending 保存失败、确认无效、正式写入失败、回读失败。所有回复都不得声称已保存。
+
+## 13. N42 结束
+
+回答模式“返回设定格式配置的回答”；输出 `output｜输入｜workflow_finished`；回答内容“本轮处理已结束，请以上方消息节点的提示为准。”；思考内容空、流式关闭。所有消息连接 N42。
+
+## 14. 调试指南
+
+1. 真实完整经历：第一轮新增 pending，返回 token，不写正式字段。
+2. 缺本人行动：到 N14 追问，不生成草稿。
+3. 伪造请求：到 N11，不调用履历生成模型、不写数据库。
+4. 错 token：到 N38，pending 保留，正式字段不变。
+5. 正确确认：更新正式字段并回读一致后到 N41。
+6. 取消：pending 归档，正式履历未新增。
+7. 写入/回读失败：到 N39/N40，不说已保存。
+
+## 15. 验收清单
+
+- [ ] 只用 DB-08 模板真实字段。
+- [ ] 伪造请求有独立安全出口。
+- [ ] pending 和正式字段严格分开，token 由代码校验。
+- [ ] 正式写入后回读一致才说成功。
+- [ ] 所有代码无 import、输出声明完整；所有分支连接 N42。
