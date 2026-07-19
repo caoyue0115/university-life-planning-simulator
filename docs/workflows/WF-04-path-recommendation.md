@@ -191,7 +191,19 @@ def main(results):
 ```text
 你是可解释的大学路径规划教练。必须逐一评估保研、考研、就业、考公、留学。只能使用：高匹配、中匹配、待验证、当前不建议投入。不得给成功概率，不得虚构经历。
 每条路径必须有 name、level、requirements、gaps、priorities、evidence、limitations、fallback、source_notes。政策性要求必须来自知识结果并保留来源/更新时间；无法确认时写“请以学校或主管部门官方渠道为准”。最后给一个 primary_route、至少一个 alternative_routes，并列出 assumptions_to_validate。
-只输出合法 JSON。
+为适配平台变量提取器，顶层必须额外输出 route_names 和 route_levels 两个字符串数组；两者顺序必须与 routes 完全一致。模型还要根据自身输出如实填写 structure_complete 和 source_notes_complete，不能为了通过校验固定写 true。
+只输出以下结构的合法 JSON：
+{
+  "routes": [],
+  "route_names": ["保研", "考研", "就业", "考公", "留学"],
+  "route_levels": [],
+  "primary_route": "",
+  "alternative_routes": [],
+  "structure_complete": false,
+  "source_notes_complete": false,
+  "assumptions_to_validate": [],
+  "reply": ""
+}
 ```
 
 用户提示词：
@@ -212,37 +224,45 @@ N14 输入 `input=N13/output`，输出：
 | 变量名 | 类型 | 描述 |
 |---|---|---|
 | `route_recommendation_json` | String | 完整推荐对象 JSON 字符串，供数据库保存 |
-| `routes` | Array | 完整 routes 数组，每项包含 name 和 level 等字段 |
+| `route_names` | Array<String> | 按 routes 顺序提取五个路径名称 |
+| `route_levels` | Array<String> | 按 routes 顺序提取五个匹配等级 |
 | `primary_route` | String | 主路径名称 |
-| `alternative_routes` | Array | 备选路径数组 |
+| `alternative_routes` | Array<String> | 备选路径名称数组 |
+| `structure_complete` | Boolean | 每条路径是否都包含规定字段；按实际内容提取 |
+| `source_notes_complete` | Boolean | 五条路径是否都有来源或待核验说明；按实际内容提取 |
 | `reply` | String | 面向用户的简短总结 |
 
-N15 输入上述五项：
+> 当前页面只提供基础类型数组，不提供 `Array<Object>`。不要添加 `routes:Array<Object>`；完整对象数组只保留在 `route_recommendation_json:String` 中。
+
+N15 输入上述八项：
 
 ```python
-def main(route_recommendation_json, routes, primary_route, alternative_routes, reply):
+def main(route_recommendation_json, route_names, route_levels, primary_route, alternative_routes, structure_complete, source_notes_complete, reply):
     required_names = ["保研", "考研", "就业", "考公", "留学"]
     allowed_levels = ["高匹配", "中匹配", "待验证", "当前不建议投入"]
-    values = routes if isinstance(routes, list) else []
-    found = []
+    names = route_names if isinstance(route_names, list) else []
+    levels = route_levels if isinstance(route_levels, list) else []
+    alternatives = alternative_routes if isinstance(alternative_routes, list) else []
     errors = []
-    for item in values:
-        if isinstance(item, dict):
-            name = str(item.get("name", ""))
-            if name in required_names and name not in found:
-                found.append(name)
-            if item.get("level") not in allowed_levels:
-                errors.append(name + "的 level 无效")
-            for key in ["requirements", "gaps", "priorities", "evidence", "limitations", "source_notes"]:
-                if not isinstance(item.get(key), list):
-                    errors.append(name + "缺少" + key)
+
     for name in required_names:
-        if name not in found:
+        if name not in names:
             errors.append("缺少路径:" + name)
+    if len(names) != 5:
+        errors.append("路径数量不是5")
+    if len(levels) != 5:
+        errors.append("路径等级数量不是5")
+    for level in levels:
+        if str(level) not in allowed_levels:
+            errors.append("无效等级:" + str(level))
     if str(primary_route) not in required_names:
         errors.append("primary_route 无效")
-    if not isinstance(alternative_routes, list) or len(alternative_routes) < 1:
+    if len(alternatives) < 1:
         errors.append("缺少备选路径")
+    if structure_complete is not True:
+        errors.append("路径字段不完整")
+    if source_notes_complete is not True:
+        errors.append("来源或核验说明不完整")
     text_value = str(route_recommendation_json).strip()
     if not text_value.startswith("{") or not text_value.endswith("}"):
         errors.append("完整 JSON 字符串无效")

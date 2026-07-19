@@ -82,6 +82,19 @@ def main() -> int:
                 errors.append(f"{path.name}: missing debugging guide")
             if "验收清单" not in text:
                 errors.append(f"{path.name}: missing acceptance checklist")
+        if path.name == "WF-04-path-recommendation.md":
+            if re.search(r"\|\s*`routes`\s*\|\s*Array(?:<Object>)?\s*\|", text):
+                errors.append(f"{path.name}: variable extractor cannot output routes as an object array")
+            for required_field in (
+                "route_names",
+                "route_levels",
+                "structure_complete",
+                "source_notes_complete",
+            ):
+                if f"`{required_field}`" not in text:
+                    errors.append(
+                        f"{path.name}: missing flattened variable-extractor field {required_field}"
+                    )
 
     if errors:
         print("\n".join(f"ERROR: {item}" for item in errors))
