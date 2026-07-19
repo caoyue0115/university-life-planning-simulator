@@ -250,15 +250,89 @@ def main(outputList):
 
 所有消息连接 N29 结束。N29 配置：`output｜输入｜workflow_finished`，回答内容“本轮处理已结束，请以上方消息节点的提示为准。”，流式关闭。
 
-## 8. 调试指南
+## 8. 调试指南：先从 WF-06 取得 active plan_id
 
-1. 创建：检查 DB-06 必填字段均有值，status=pending。
-2. 查询：空表时显示“当前没有任务记录”，不是 SQL 失败。
-3. 更新：缺 task_id 时到 N22，不写库。
-4. 完成：缺 actual_evidence 时到 N22；提供证据后 status=completed。
-5. 延期：必须同时有新截止时间和 delay_reason。
-6. 取消：只把目标任务 status 改 cancelled，不删除记录。
-7. 写入失败：临时清空更新范围，必须到 N27。
+### 8.1 上游准备
+
+1. 使用测试 uid `debug_wf07_001` 完成 WF-05 比较和 WF-06 两轮确认。
+2. 在 DB-05 `main_plans` 中筛选该 uid，只应有一条 `plan_status=active`。
+3. 复制该行 `plan_id`，不要使用 pending 或 history 行的 plan_id。
+4. 在 DB-06 `semester_tasks` 筛选该 uid，首次测试最好为空；记录测试前行数。
+
+WF-07 不会查询 DB-05 验证 plan_id，因此开始节点传错值仍可能创建一条无法归属的任务。手工测试时必须先完成上述核验。
+
+### 测试 1：空任务列表查询
+
+```text
+AGENT_USER_INPUT = 查询我的全部任务
+uid = debug_wf07_001
+plan_id = WF-06 当前 active plan_id
+semester = 2026秋
+request_time = 2026-07-19 17:00:00
+```
+
+预期 N01/task_action=query → N02 query → N03 → N04（是）→ N05 → N06 → N29。若 outputList 为空，N05 应输出“当前没有任务记录”，不是 N25 查询失败。
+
+### 测试 2：创建任务
+
+```text
+AGENT_USER_INPUT = 创建任务：本周完成项目需求分析，优先级高，成果是需求文档
+request_time = 2026-07-19 17:05:00
+```
+
+预期 N02 create → N07→N08→N09/create_valid=true→N10（是）→N11→N12（是）→N13→N29。DB-06 新增一行，`plan_id` 等于 active plan_id，`status=pending`，`task/priority/expected_evidence` 非空。复制 N13 展示的 `task_id`。
+
+### 测试 3：缺少创建必填输入
+
+临时把 N00/plan_id 留空后创建任务。预期 N09/create_valid=false → N10（否）→ N24，不执行 N11。恢复 active plan_id。再把 semester 留空重复一次，应得到同样门禁。
+
+### 测试 4：查询已有任务
+
+恢复完整输入并查询。N06 应列出测试 2 的 task_id、pending 状态、任务内容和截止信息。对照 DB-06，列表不得混入其他 uid 的记录。
+
+### 测试 5：更新任务但缺 task_id
+
+```text
+AGENT_USER_INPUT = 把任务优先级改为中
+```
+
+若输入中没有 task_id，N14 查询会空数组，N16/change_valid=false，N17（否）→N22；DB-06 不变化。随后使用明确文本“把任务 debug... 的优先级改为中”重试。
+
+### 测试 6：完成任务必须提供成果证据
+
+先输入 `完成任务 <task_id>`，不提供成果。预期 N16 报“完成任务必须提供成果证据”→N22。再输入：
+
+```text
+完成任务 <task_id>，成果证据：需求文档已保存到项目仓库 docs/requirements.md
+```
+
+预期 N18 更新成功 → N20 回读 → N21/readback_ok=true → N30（是）→N31。DB-06 对应行 `status=completed`、`actual_evidence` 非空。
+
+### 测试 7：延期必须同时提供日期和原因
+
+新建另一条 pending 任务。只说“延期任务 <task_id>”应到 N22。再提供“延期到 2026-08-01，因为课程考试周冲突”，应更新为 `status=postponed`，同时保存新 deadline 和 delay_reason，并由 N20/N21 回读。
+
+### 测试 8：取消只改状态、不删记录
+
+对另一条 pending 任务输入 `取消任务 <task_id>`。预期更新后回读成功，原记录仍存在但 `status=cancelled`；数据库行不能被删除。
+
+### 测试 9：未知操作
+
+输入“帮我看看吧”且不包含创建、查询、更新、完成、延期、取消意图。预期 N01/task_action=unknown → N02 unknown → N28 → N29，所有数据库写节点不执行。
+
+### 测试 10：查询、创建、更新和回读故障
+
+每次只破坏一个节点并在测试后恢复：
+
+1. N03 表名改错：N04（否）→N25；恢复 `semester_tasks`。
+2. N11 清空 `task_id`：N12（否）→N23；恢复 `task_id=N09/task_id`。
+3. N14 表名改错：N15（否）→N26；恢复表名。
+4. N18 清空 uid 或 task_id 更新范围：N19（否）→N27；恢复两个 AND 条件。
+5. N20 表名改错或让回读空数组：N21/readback_ok=false →N30（否）→N27；恢复查询。
+
+### 8.2 最终留证
+
+保存空列表、创建成功、缺证据、完成回读、延期和取消消息截图。DB-06 至少保留一条 completed、一条 postponed、一条 cancelled 记录，并记录 active `plan_id` 与各 task_id。确认所有临时错误已恢复。
 
 ## 9. 验收清单
 

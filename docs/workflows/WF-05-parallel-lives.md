@@ -249,14 +249,86 @@ N13 输入 `result=N07/display_result`、`message=N10/message`，回答：
 - 回答内容：`本轮处理已结束，请以上方消息节点的提示为准。`
 - 思考内容留空；流式输出关闭。
 
-## 15. 调试指南
+## 15. 调试指南：从 WF-01 和 WF-04 取得两个完整 JSON
 
-1. 正常：三条路径，预期 N03 是、N08 是、N11 是，DB-04 新增一行。
-2. 只有一条路径：预期 N03 否到 N04，不调用模型、不写数据库。
-3. 重复路径：输入“就业、就业、考研”，N02 去重后仍只有两条，可继续；若去重后不足两条则失败。
-4. 模型漏字段：让测试输出删除 `reversibility`，预期 N08 否到 N09。
-5. 版本起点：检查每个版本没有自行修改学校、专业、预算等共同基线。
-6. 写入失败：临时清空 N10/comparison_id，预期 N13，不声称已保存。
+### 15.1 前置工作流准备
+
+WF-05 不查询上游数据库，`profile_json` 和 `route_recommendation_json` 都由开始节点直接传入。手工调试前按顺序准备：
+
+1. 用 `debug_wf05_001` 完成 WF-01 两轮确认，从 DB-01 confirmed 行复制完整 `profile_json`。
+2. 用同一 uid 完成 WF-03，并记下 `assessment_id`。
+3. 用该 uid 和 assessment_id 完成 WF-04，必须走到 N25。
+4. 从 DB-03 对应行复制完整 `route_recommendation_json`。不要复制 N25 中被界面截断的显示片段。
+5. 确认推荐中确实含保研、考研、就业、考公、留学五条路径。
+6. 在 DB-04 `parallel_versions` 记录该 uid 测试前行数。
+
+保存一份调试变量备忘：
+
+```text
+uid = debug_wf05_001
+profile_json = DB-01 confirmed 完整值
+route_recommendation_json = WF-04 写回 DB-03 的完整值
+selected_routes = 保研,考研,就业
+```
+
+### 测试 1：正常比较三条路径
+
+N00 输入：
+
+```text
+AGENT_USER_INPUT = 请比较保研、考研和就业三个版本
+uid = debug_wf05_001
+profile_json = 上游完整值
+route_recommendation_json = 上游完整值
+selected_routes = 保研,考研,就业
+request_time = 2026-07-19 15:00:00
+```
+
+预期路径：N00→N01→N02→N03（是）→N05→N06→N07→N08（是）→N10→N11（是）→N12→N14。
+
+重点检查 N02：`normalized_routes` 恰好三项且不重复，`shared_baseline_json` 与输入画像一致。N07 生成的每个版本必须使用同一学校、专业、年级、预算和剩余时间，只允许路径策略不同。
+
+DB-04 应新增一行：`comparison_id` 非空，`versions_json` 有三个版本，`shared_baseline_json` 与画像一致，`comparison_version=1`。复制 comparison_id 和希望选择的版本名称，供 WF-06 使用。
+
+### 测试 2：只有一条路径
+
+把 `selected_routes` 和用户原话都改成只含“就业”。预期 N02/input_valid=false → N03（否）→ N04 → N14；N05 不调用，DB-04 行数不增加。
+
+### 测试 3：重复路径的去重边界
+
+输入 `就业,就业,考研`。N02 应去重为 `就业,考研`，仍有两条所以可以继续。再测试 `就业,就业`，去重后只有一条，应走 N04。检查 N01/routes 和 N02/normalized_routes，不要仅看最终消息猜测去重是否生效。
+
+### 测试 4：缺少或损坏画像
+
+临时把 `profile_json` 填成空字符串或 `not-json`。预期 N02/input_valid=false → N04，不调用 N05。测试后恢复从 DB-01 复制的完整 JSON。
+
+### 测试 5：推荐缺失但画像有效
+
+把 `route_recommendation_json` 临时填 `{}`。当前 N02 会保留 `{}` 并允许继续，检查 N05 输出是否明确缺少推荐证据，不能虚构 WF-04 的具体结论。正式验收必须恢复完整推荐后再跑正常用例。
+
+### 测试 6：模型漏字段或版本数量错误
+
+在 N06/N07 的测试数据中临时删除一个版本的 `reversibility`，或让版本数少于所选路径数。预期 N07/complete=false → N08（否）→ N09 → N14，N10 不执行。恢复 N06 的完整提取字段。
+
+### 测试 7：共同起点被模型改写
+
+检查各版本中的学校、专业、预算、年级等共同基线。若某版本擅自修改这些条件，N07 应判为不完整或结果不可接受；不得仅因为模型 JSON 格式正确就通过。修正 N05 提示词或重新生成，直到各版本只改变路径策略。
+
+### 测试 8：DB-04 写入失败
+
+记录 N10 正确映射后，临时把必填 `comparison_id` 改为空输入。预期 N11（否）→ N13 → N14；N13 可以展示本轮结果，但必须说明没有保存。测试后恢复 `comparison_id=N07/comparison_id`。
+
+### 15.2 调试完成后的交接
+
+保存 N12 消息和 DB-04 新增行截图，并记录：
+
+```text
+uid
+comparison_id
+selected_version_name（必须与 versions_json 内名称完全一致）
+```
+
+WF-06 首轮将直接使用这三个值。确认 N10 的临时空值已经恢复。
 
 ## 16. 验收清单
 

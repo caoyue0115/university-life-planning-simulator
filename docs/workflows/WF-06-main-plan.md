@@ -352,15 +352,101 @@ N30：`N29/isSuccess == true`；是 → N31，否 → N40。N31 回答：`已取
 
 N41：回答模式“返回设定格式配置的回答”；输出 `output｜输入｜workflow_finished`；回答内容“本轮处理已结束，请以上方消息节点的提示为准。”；思考内容空，流式关闭。
 
-## 14. 调试指南
+## 14. 调试指南：使用 WF-05 比较记录完成两轮确认
 
-1. 首轮选版本：应新增 plan_status=pending，active 不变。
-2. 错 token：应到 N36，数据库不改变。
-3. 正确确认：应先把旧 active 改 history，再把 pending 改 active，N28 才说成功。
-4. 修改：生成新 pending；旧 active 在用户再次确认前保持 active。
-5. 取消：pending 归档，active 不变。
-6. 归档失败：临时改错 N20 表名/范围，应到 N37，不能继续激活。
-7. 回读不一致：应到 N39。
+### 14.1 从 WF-05 取得首轮输入
+
+1. 使用测试 uid `debug_wf06_001` 完成 WF-05 正常三路径比较。
+2. 进入 DB-04 `parallel_versions`，筛选该 uid，打开最新一行。
+3. 复制 `comparison_id`。
+4. 打开 `versions_json`，从中复制一个版本名称作为 `selected_version_name`；名称必须逐字一致，不能自己简写。
+5. 在 DB-05 `main_plans` 筛选该 uid。首次测试应没有 active/pending；若已有记录，换新 uid 做“首次激活”测试。
+
+### 测试 1：首轮生成 pending 主规划
+
+```text
+AGENT_USER_INPUT = 把就业优先版做成主规划草稿
+uid = debug_wf06_001
+comparison_id = 从 DB-04 复制
+selected_version_name = versions_json 中的真实名称
+confirmation_token = 空
+request_time = 2026-07-19 16:00:00
+```
+
+预期：N01 SQL 成功（空数组也算成功）→N03→N04 识别 draft→N05 draft/modify→N06～N09 找到版本→N10～N14→N15（是）→N16→N41。
+
+DB-05 应新增 `plan_status=pending` 的行；`pending_plan_json` 非空、`confirmation_token` 非空、`source_comparison_id` 等于输入 comparison_id，`plan_json` 不能被当作正式 active 使用。复制 N16 展示的 token。
+
+### 测试 2：版本名称不存在
+
+使用同一 comparison_id，把 `selected_version_name` 改成 `不存在版本`。预期 N06 SQL 成功 → N08/version_found=false → N09（否）→ N34 → N41。N10 不调用，DB-05 不新增 pending。
+
+### 测试 3：比较记录读取失败和空记录的区别
+
+- 空记录：输入不存在的 comparison_id；N06/isSuccess=true、outputList=[]，最终 N09（否）→N34。
+- SQL 失败：临时把 N06 表名改为 `parallel_versions_wrong`；N07（否）→N33。
+
+测试后恢复 `parallel_versions`，不能把这两个用例合并成一个“读取失败”。
+
+### 测试 4：错误 token 不得激活
+
+保留测试 1 的 pending 行：
+
+```text
+AGENT_USER_INPUT = 确认保存主规划
+uid = debug_wf06_001
+comparison_id = 可保持原值
+selected_version_name = 可保持原值
+confirmation_token = wrong-token
+request_time = 2026-07-19 16:05:00
+```
+
+预期 N04 识别 confirm → N18/confirm_valid=false → N19（否）→ N36 → N41。DB-05 pending 行仍是 pending，不能出现 active。
+
+### 测试 5：正确 token 首次激活
+
+把 confirmation_token 换成 N16 返回的完整 token，request_time 改为更晚。预期：
+
+```text
+N18 → N19（是）→ N20 → N21（是）
+→ N22 → N23（是）→ N24 → N25（是）
+→ N26 → N27（是）→ N28 → N41
+```
+
+首次没有旧 active 时，N20 SQL 成功但可能更新 0 行，仍可继续；N22 必须把目标 pending 行变成 active。DB-05 最终只有一条 active，`plan_json` 非空，`pending_plan_json={}` 或为空，token 已清空。只有 N26 回读一致后 N28 才能说保存成功。复制 active `plan_id`，供 WF-07/WF-08 使用。
+
+### 测试 6：在已有 active 上生成修改草稿
+
+再次输入“修改主规划，增加实习准备”，使用有效 comparison_id 和版本名、token 留空。预期新增或保存一条 pending，但旧 active 保持 active；在用户确认前不能归档旧 active。
+
+### 测试 7：确认新版本并归档旧 active
+
+复制修改草稿的新 token，运行确认。数据库核验顺序：旧 active 先变 `history`，新 pending 再变 `active`；最终仍只能有一条 active。若旧 active 未归档却出现第二条 active，停止测试并检查 N20 范围。
+
+### 测试 8：取消 pending
+
+先生成一条新 pending，再输入“取消这次主规划修改”。预期 N04=cancel → N29 → N30（是）→ N31 → N41。目标 pending 变 archived，现有 active 完全不变。
+
+### 测试 9：DB-05 初始读取失败
+
+临时把 N01 表名改为 `main_plans_wrong`。预期 N02（否）→ N32 → N41，其他读写节点不执行。恢复 `main_plans`。
+
+### 测试 10：pending 写入失败
+
+临时清空 N14 的 `plan_id` 或其他必填映射。预期 N15（否）→ N17 → N41，不能展示有效 token。恢复 N14 全部映射。
+
+### 测试 11：归档、激活和回读故障门禁
+
+分别单独测试并每次恢复：
+
+1. 临时改错 N20 更新范围：预期 N21（否）→N37，N22 不执行。
+2. 临时改错 N22 pending 范围：预期 N23（否）→N38，不能说保存成功。
+3. 临时改错 N24 表名：预期 N25（否）→N39。
+4. 临时让 N26 expected 引用错误值：预期 N27（否）→N39。
+
+### 14.2 最终交接和留证
+
+保存草稿 N16、错误 token N36、正确确认 N28、取消 N31 的截图。DB-05 留证必须能说明 pending、history、active 的变化，并记录当前唯一 active 的 `uid + plan_id`。确认 N01、N06、N14、N20、N22、N24、N26 均已恢复。
 
 ## 15. 验收清单
 

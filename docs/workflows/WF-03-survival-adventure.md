@@ -354,16 +354,105 @@ N25：`N24/isSuccess == true`。是 → N26；否 → N27。
 - 回答内容：`本轮处理已结束，请以上方消息节点的提示为准。`
 - 流式输出：关闭。
 
-## 19. 调试指南：按顺序测试
+## 19. 调试指南：先准备 WF-01，再完成多轮题目
 
-1. **首轮**：`AGENT_USER_INPUT=开始测试`。应走 N04 否，新增一条 DB-02 状态，展示 Q1。
-2. **有效答案**：同 uid 输入 `A`。应走 N13 是；最新状态的 `current_index` 增加、旧答案保留。
-3. **无效答案**：输入“都行”。应到 N14，数据库不新增。
-4. **中断续接**：关闭调试后重新打开，用同 uid 继续。N03 必须读到上一题。
-5. **完成前门禁**：未达到 `configured_question_count` 时，绝不能执行 N24。
-6. **完成**：最后一题后 N21 是，DB-03 新增一条 `assessment_id`，`adventure_result_json` 五路径和八项能力齐全。
-7. **读取失败**：临时改错 N01 表名，应到 N29。
-8. **最终写入失败**：临时清空 N24 的 `assessment_id`，应到 N27，回复不得说“已保存”。
+### 19.1 上游数据和两张表的准备
+
+1. 先用测试 uid `debug_wf03_001` 在 WF-01 完成画像确认。
+2. 在 `user_profiles` 找到该 uid 最新 `pending_status=confirmed` 的行，复制完整 `profile_json`。
+3. 确认 `simulation_states` 和 `route_assessments` 两张表已经按 DB-02、DB-03 模板创建。
+4. 在 `simulation_states` 筛选该 uid，确认没有 `workflow_id=WF-03` 的旧状态；有旧记录时优先换新 uid。
+5. 在 `route_assessments` 筛选该 uid，记录测试前行数，方便确认最终评估只在完成后新增。
+
+这里必须理解两张表的职责：每道题的过程状态写 DB-02；全部题目完成后才由 N24 向 DB-03 新增最终评估。看到 DB-02 写入不代表整套测试已经完成。
+
+### 19.2 固定调试输入规则
+
+所有轮次使用相同 `uid` 和 `profile_json`，每轮把 `request_time` 改成更晚时间。首次快速验证建议：
+
+```text
+configured_question_count = 3
+```
+
+三题流程跑通后，再改为产品计划使用的正式题数重新验收。题数在同一轮测试中不要中途修改，否则完成判断会不一致。
+
+### 测试 1：首轮生成 Q1
+
+```text
+AGENT_USER_INPUT = 开始大学生存大冒险
+uid = debug_wf03_001
+profile_json = 从 WF-01 confirmed 行复制
+request_time = 2026-07-19 13:00:00
+configured_question_count = 3
+```
+
+预期路径：N01 SQL 成功空数组 → N02（是）→ N03 输出 `has_pending=false` → N04（否）→ N05～N08 → N09（是）→ N10 → N28。
+
+数据库核验：DB-02 新增 `workflow_id=WF-03`、`state_type=adventure` 的行；`pending_item_json` 是 Q1，`completed=false`。DB-03 此时不能新增评估。
+
+### 测试 2：无效答案
+
+第二轮保持 uid、profile_json 和题数不变：
+
+```text
+AGENT_USER_INPUT = 都行
+request_time = 2026-07-19 13:05:00
+```
+
+预期 N04（是）→ N12 → N13（否）→ N14 → N28。DB-02 行数、最新 `current_index` 和 Q1 均不变化；N15 不执行。
+
+### 测试 3：有效回答 Q1
+
+复制 N10 实际展示的一个选项，例如：
+
+```text
+AGENT_USER_INPUT = A
+request_time = 2026-07-19 13:10:00
+```
+
+预期路径：N04（是）→ N12 → N13（是）→ N15～N18 → N19（是）→ N21（否）→ N22 → N28。DB-02 再新增一行，最新 `current_index` 增加，已回答题目和信号保留，同时存在下一题 pending。
+
+### 测试 4：中断后继续同一测试
+
+退出调试页面再重新打开，仍用同一 uid。N01 必须读到 DB-02 最新行，N03 恢复 pending 题目。输入最新题的真实选项后继续；若重新生成 Q1，应检查 uid、N01 的 `workflow_id='WF-03'` 和排序字段。
+
+### 测试 5：完成前门禁
+
+当 `current_index` 尚未达到 `configured_question_count` 时，每一轮都应走 N21（否）→ N22。观察调试轨迹，N23 和 N24 不得执行，DB-03 行数不得变化。
+
+### 测试 6：最后一题与最终评估
+
+回答第 3 题的有效选项。预期：
+
+```text
+N15 → N16 → N17 → N18 → N19（是）→ N21（是）
+→ N23 → N24 → N25（是）→ N26 → N28
+```
+
+DB-02 最新行应为 `completed=true`、`pending_item_json={}`。DB-03 应新增一行，复制并保存其 `assessment_id`，后续 WF-04 就使用这个值。`adventure_result_json` 应包含五路径信号和八项能力证据；`route_recommendation_json` 此时仍为初始化值，完整推荐由 WF-04 写入。
+
+### 测试 7：DB-02 读取失败
+
+临时把 N01 SQL 表名从 `simulation_states` 改为 `simulation_states_wrong`。预期 N02（否）→ N29 → N28，所有模型和写入节点都不执行。恢复正确表名后再次运行，确认能读取原进度。
+
+### 测试 8：题目状态写入失败
+
+使用新 uid 的首轮，临时清空 N08 的 `state_id` 引用。预期 N09（否）→ N11 → N28，消息说明题目未保存。恢复 `state_id=N07/state_id`。
+
+### 测试 9：结算状态写入失败
+
+对已有 pending 的 uid，临时清空 N18 的 `state_id`。输入有效答案后应 N19（否）→ N20，不能推进到 N21。恢复 `state_id=N17/state_id`。
+
+### 测试 10：最终 DB-03 写入失败
+
+在即将完成的测试上，临时清空 N24 的 `assessment_id` 值。预期 N25（否）→ N27 → N28。N27 可以展示本轮草稿，但必须明确没有保存；DB-03 不得出现有效新行。测试后恢复 `assessment_id=N23/assessment_id`，建议换新 uid 从头完成一次成功验收。
+
+### 19.3 最终留证
+
+- 保存 Q1 消息、无效答案消息、一次中间结算和最终 N26 的截图。
+- 保存 DB-02 全部过程行和 DB-03 最终行截图。
+- 记录最终 `uid + assessment_id`，供 WF-04 调试使用。
+- 恢复 N01、N08、N18、N24 的所有临时错误配置。
 
 ## 20. 验收清单
 

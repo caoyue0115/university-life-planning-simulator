@@ -159,15 +159,61 @@ N09：`N08/isSuccess == true`；是 → N10，否 → N11。
 
 所有消息关闭流式输出并连接 N15。N15：回答模式“返回设定格式配置的回答”；输出 `output｜输入｜workflow_finished`；回答内容“本轮处理已结束，请以上方消息节点的提示为准。”。
 
-## 9. 调试指南
+## 9. 调试指南：用独立 uid 验证事实边界
 
-1. 习惯完成：`今天背了20分钟单词`，应写 habit、completed=true、duration=20。
-2. 只是计划：`明天想背单词`，completed=false；不能说已完成。
-3. 支出：金额保留为 String，不自行换算币种。
-4. 运动：缺分钟数到 N12，不写库。
-5. 高风险节食/过度运动：到 N14，不写数据库。
-6. 查询失败：临时改错 N05 表名，到 N13。
-7. 新增失败：临时清空 log_id，到 N11。
+### 9.1 前置准备
+
+WF-11 没有强制上游工作流。使用 `debug_wf11_001`，在 DB-10 `habit_logs` 记录测试前行数。每条测试使用不同 request_time，防止生成重复 log_id。
+
+### 测试 1：已完成的习惯
+
+```text
+AGENT_USER_INPUT = 今天背了20分钟单词，已经完成
+uid = debug_wf11_001
+request_time = 2026-07-19 21:00:00
+```
+
+预期 N01/log_type=habit、duration_minutes=20、completed=true→N02（否）→N03/record_valid=true→N04（是）→N05→N06（是）→N07→N08→N09（是）→N10。DB-10 新增 habit 行，不能把它记成 fitness。
+
+### 测试 2：计划不能写成已完成
+
+输入“明天想背20分钟单词”。N01/completed 必须为 false；允许保存计划描述时，N10 反馈也不能说“今天已完成”。对比 DB-10 `completed=false`。
+
+### 测试 3：支出金额保持原话
+
+输入“今天午饭花了23.5元”。预期 log_type=expense、amount=`23.5` 或保留用户原金额文本，字段类型为 String。不得擅自换算币种、补税费或推断消费能力。
+
+### 测试 4：运动缺分钟数
+
+输入“今天跑步了”，没有时长。N03 应判 `record_valid=false`→N04（否）→N12，不执行 N05/N08。再输入“今天跑步30分钟”应能保存 fitness、duration_minutes=30。
+
+### 测试 5：未知记录类型
+
+输入“今天心情一般”但没有习惯、支出或运动事实。预期 N01/log_type=unknown，N03 报无法识别→N12，不写数据库。
+
+### 测试 6：高风险健康或安全输入
+
+输入涉及极端节食、过度运动、自伤或严重健康风险的内容。预期 N01/safety_risk=true→N02（是）→N14→N15；N03、N05、N08 不执行，敏感原话不作为普通打卡写入。
+
+### 测试 7：第一次同类记录不是查询失败
+
+换全新 uid 记录一条合法 habit。N05 SQL 成功但 outputList 为空，N06 仍走“是”，N07/recent_completed=0 并继续写入。若走 N13，检查是否误把空数组当成 isSuccess=false。
+
+### 测试 8：同类近期次数
+
+同 uid 再记录两条已完成 habit。N07 只能根据最近查询结果说明“最近同类完成次数”，不得声称跨月连续打卡天数。检查数据库有多行真实记录而非覆盖。
+
+### 测试 9：历史查询失败
+
+临时把 N05 表名改为 `habit_logs_wrong`。预期 N06（否）→N13→N15，N08 不执行。恢复 `habit_logs` 后重新运行合法记录。
+
+### 测试 10：新增失败
+
+临时把 N08/log_id 改为空输入。预期 N09（否）→N11，消息说明整理成功但未保存。恢复 `log_id=N07/log_id`。
+
+### 9.2 最终核验
+
+DB-10 应至少有 habit completed=true、habit completed=false、expense、fitness 四类测试结果，高风险和无效输入不得有行。保存 N10、N12、N14、N13、N11 截图，并恢复 N05/N08。
 
 ## 10. 验收清单
 

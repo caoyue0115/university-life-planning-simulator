@@ -435,15 +435,118 @@ def main(expected, outputList):
 - 回答内容：`本轮处理已结束，请以上方消息节点的提示为准。`
 - 思考内容留空，流式输出关闭。
 
-## 14. 调试指南
+## 14. 调试指南：先验证 WF-01、WF-03 和 KB-01
 
-1. **正常**：使用真实存在的 uid 和 assessment_id。应走到 N25；DB-03 对应记录版本增加，回读文本一致。
-2. **缺画像**：换一个没有 confirmed 画像的 uid。应到 N29，不调用知识库和模型。
-3. **错误 assessment_id**：应到 N30，不更新数据库。
-4. **知识库空**：临时移除 N10 知识库。应到 N33，不让模型编造来源。
-5. **模型漏路径**：在 N13 测试输出中删掉“考公”。N15 valid=false，到 N28。
-6. **更新失败**：临时清空 N17 的更新范围。应到 N26，测试后恢复。
-7. **回读不一致**：临时让 N21 expected 引用错误变量。应到 N27，不能出现“保存成功”。
+### 14.1 三项前置依赖必须全部完成
+
+#### 前置 A：WF-01 已确认画像
+
+1. 使用测试 uid `debug_wf04_001` 完成 WF-01 草稿轮和确认轮。
+2. 在 `user_profiles` 中筛选该 uid。
+3. 必须能找到 `pending_status=confirmed` 且 `profile_json` 非空的最新行。
+4. 只生成 pending 草稿不够；WF-04 的 N01 SQL 只读取 confirmed 行。
+
+#### 前置 B：WF-03 已完成评估
+
+1. 用同一个 `debug_wf04_001` 完成 WF-03 全部题目。
+2. 在 `route_assessments` 中找到 WF-03 N24 新增的行。
+3. 复制 `assessment_id`，确认 `adventure_result_json` 非空。
+4. 测试 WF-04 前记录该行当前 `assessment_version` 和 `route_recommendation_json`，用于对比更新结果。
+
+#### 前置 C：KB-01 已能命中
+
+1. 按第 6.1 节创建 `KB-01 大学五路径规则库` 并上传五份 Markdown。
+2. 在知识库命中测试中分别测试保研、考研、就业、考公、留学。
+3. 五类查询都能命中后，才把知识库关联到 N10。
+4. N10 固定 Top K=3、Score 阈值=0.20、调用逻辑“强制调用”。
+
+### 14.2 正常路径完整调试
+
+N00 填写：
+
+```text
+AGENT_USER_INPUT = 根据场景测试给我五路径建议
+uid = debug_wf04_001
+assessment_id = 从 WF-03 的 route_assessments 行复制
+request_time = 2026-07-19 14:00:00
+```
+
+预期完整路径：
+
+```text
+N00 → N01 → N02（是）→ N03 → N04（是）
+→ N05 → N06（是）→ N07 → N08（是）
+→ N09 → N10 → N11 → N12（是）
+→ N13 → N14 → N15 → N16（是）
+→ N17 → N18（是）→ N19 → N20（是）
+→ N21 → N22（是）→ N25 → N34
+```
+
+逐段检查：
+
+- N03/has_profile=true，`profile_json` 来自 DB-01 confirmed 行。
+- N07/has_assessment=true，`record_id` 与 DB-03 目标行 id 一致。
+- N10/results 不是空数组，片段能说明所属路径和核验来源。
+- N15/valid=true，五条路径名称齐全，等级只使用规定的四种。
+- N17 更新的是同一 uid、同一 assessment_id，不能新增另一条评估。
+- N21/readback_matches=true 后才到 N25。
+
+数据库核验：DB-03 目标行 `route_recommendation_json` 从空值或 `{}` 变为完整对象，`assessment_version` 增加，`updated_at` 等于本轮 request_time。复制该完整 JSON，WF-05 将使用它。
+
+### 测试 2：uid 没有 WF-01 confirmed 画像
+
+使用一个在 `user_profiles` 中不存在的 uid，但 assessment_id 随便填一个非空测试值。N01 SQL 应成功返回空数组，N02 仍走“是”，N03/has_profile=false，N04（否）→ N29 → N34。N05 及其后节点都不能执行。
+
+### 测试 3：DB-01 SQL 执行失败
+
+临时把 N01 表名改为 `user_profiles_wrong`。预期 N02（否）→ N31 → N34。测试后恢复 `user_profiles`。这个用例和“没有画像”不同：前者 isSuccess=false，后者 isSuccess=true 但 outputList 为空。
+
+### 测试 4：错误 assessment_id
+
+恢复正确 uid，输入：
+
+```text
+assessment_id = ASSESSMENT-NOT-EXIST
+```
+
+N05 SQL 应成功空数组 → N06（是）→ N07/has_assessment=false → N08（否）→ N30 → N34。N17 不得执行，原 DB-03 行不变化。
+
+### 测试 5：DB-03 读取 SQL 失败
+
+临时把 N05 表名改为 `route_assessments_wrong`。预期 N06（否）→ N32 → N34。恢复表名 `route_assessments` 后再运行正常读取。
+
+### 测试 6：知识库没有结果
+
+先记录 N10 当前关联的 `KB-01` 和参数。临时移除关联或使用一个确定不命中的测试查询，预期 N11/knowledge_available=false → N12（否）→ N33 → N34。N13 不执行，系统不能在没有资料时凭记忆生成政策性推荐。测试后重新关联 KB-01 并恢复 N09 规则。
+
+### 测试 7：模型结果缺少路径或来源
+
+调试 N15 时可临时让 N14 的 `route_names` 少一个“考公”，或让 `source_notes_complete=false`。预期 N15/valid=false → N16（否）→ N28 → N34，N17 不执行。测试后恢复 N14 的完整输出映射。
+
+### 测试 8：数据库更新失败
+
+记录 N17 正确更新范围：`uid=N00/uid` AND `assessment_id=N00/assessment_id`。临时清空 assessment_id 条件值或把表改错，使 N17/isSuccess=false。预期 N18（否）→ N26 → N34，消息不得称已保存。随后恢复正确范围和表名。
+
+### 测试 9：回读 SQL 失败
+
+临时把 N19 SQL 表名改错。预期 N20（否）→ N27 → N34。虽然 N17 可能已经更新，系统仍不得声称回读确认成功。恢复 N19 表名后用数据库直接检查目标记录。
+
+### 测试 10：回读内容不一致
+
+临时让 N21 的 `expected` 引用一个错误字符串，而 `outputList` 仍引用 N19/outputList。预期 N21/readback_matches=false → N22（否）→ N27 → N34。测试后恢复 `expected=N15/recommendation_json`。
+
+### 14.3 调试完成后的交接记录
+
+保存下面四项，WF-05 搭建时直接使用：
+
+```text
+uid = debug_wf04_001
+assessment_id = 本次更新的 assessment_id
+profile_json = DB-01 confirmed 行完整值
+route_recommendation_json = DB-03 回读后的完整值
+```
+
+最后确认 N01、N05、N10、N14、N17、N19、N21 的临时故障配置都已恢复，并保存 N25 消息、N21 回读结果和 DB-03 目标行截图。
 
 ## 15. 验收清单
 

@@ -246,14 +246,87 @@ N16 输入 `reply=N07/reply`、`recap=N13/stored_user_recap_json`、`next_entry=
 
 所有消息关闭流式输出并连接 N22。N22：回答模式“返回设定格式配置的回答”；输出 `output｜输入｜workflow_finished`；回答内容“本轮处理已结束，请以上方消息节点的提示为准。”。
 
-## 11. 调试指南
+## 11. 调试指南：明确哪些上游结果才算 successful_writes
 
-1. 正常会话：DB-11 新增 version=1，回读后展示 user_recap。
-2. 同 session 再生成：version 应递增，不覆盖旧记录。
-3. 空 successful_writes：state_changes 必须为空；否则 N07 拦截。
-4. 草稿未确认：只能出现在 open_questions/next_entry，不能进入 state_changes。
-5. conversation_text 太短：到 N19，不调用模型。
-6. 写入失败/回读不一致：到 N17/N18，不说已保存。
+### 11.1 WF-12 如何接收前面工作流的结果
+
+WF-12 不会自动读取 WF-01～WF-11 的所有输出。主 Agent 调用时必须显式传入：
+
+- `conversation_text`：本次会话完整文本或可靠逐轮摘要。
+- `successful_writes_json`：本次真正写入数据库且必要时已经回读一致的操作。
+
+可以进入 successful_writes 的例子：WF-01 N25、WF-04 N25、WF-06 N28、WF-07 N31、WF-08 N20/N21/N22 前已经完成 DB-07 回读、WF-09 N41、WF-12 自己以外的其他明确写入成功节点。
+
+不能进入 successful_writes 的例子：pending 草稿、错误 token、取消失败、数据库 message 失败、仅展示但未保存的模型结果，以及结束节点固定 `workflow_finished`。
+
+手工调试可使用：
+
+```json
+{"writes":[{"workflow_id":"WF-07","record_type":"semester_task","record_id":"debug_wf12_001-TASK-001","status":"completed","verified_by":"database_readback"}]}
+```
+
+没有成功写入时必须传 `{}`，不能用自然语言“应该保存了”代替。
+
+### 测试 1：首次生成正常会话复盘
+
+```text
+AGENT_USER_INPUT = 结束并复盘本次会话
+uid = debug_wf12_001
+session_id = SESSION-DEBUG-001
+conversation_text = 用户说本周完成了需求文档，并确认任务已完成。Agent 调用 WF-07，数据库写入和回读成功。用户还想下周讨论实习选择。
+successful_writes_json = 上述包含 WF-07 completed 的 JSON
+request_time = 2026-07-19 22:00:00
+```
+
+预期：N01 SQL 成功空数组→N02（是）→N03/input_valid=true、next_recap_version=1→N04（是）→N05～N09→N10（是）→N11→N12（是）→N13→N14（是）→N16→N22。
+
+DB-11 新增 `recap_version=1`；`state_changes_json` 只能包含 successful_writes 中的任务完成，`open_questions_json` 保留实习选择，N13 回读内容与 N07 准备写入值一致。
+
+### 测试 2：同一 session 再次生成版本 2
+
+保持 uid 和 session_id，补充新的 conversation_text，request_time 改晚。预期 N01 读到 version 1，N03/next_recap_version=2；DB-11 新增 version 2，不覆盖 version 1。`previous_recap_json` 应引用最新 agent_recap 作为续接上下文。
+
+### 测试 3：没有成功写入
+
+传入 `successful_writes_json={}`，conversation_text 可以包含讨论和草稿。预期最终 `state_changes_json` 为空。若 N06 模型输出了状态变化，N07 必须判无效→N08（否）→N20，不写 DB-11。
+
+### 测试 4：pending 草稿不得成为状态变化
+
+conversation_text 写明“生成了主规划草稿，但用户尚未确认”，successful_writes_json 仍为 `{}`。该事项只能进入 open_questions 或 next_entry，例如“等待用户确认 WF-06 token”，不能进入 state_changes 或写成 active 主规划。
+
+### 测试 5：用户新事实与 Agent 推断分离
+
+输入“用户明确说预算每月1500元；Agent 推测用户可能更喜欢稳定”。预期 new_facts 只能记录预算区间，不能把“喜欢稳定”当作用户事实。若模型混入，N07 应拦截或调试时判不合格并修正提示。
+
+### 测试 6：conversation_text 太短
+
+把 conversation_text 填“结束”。N03/input_valid=false→N04（否）→N19→N22；N05 不调用，DB-11 不新增。恢复至少 20 个字符且包含事实边界的会话内容。
+
+### 测试 7：历史读取失败
+
+临时把 N01 表名改为 `session_recaps_wrong`。预期 N02（否）→N21→N22，N05 和所有写入节点不执行。恢复 `session_recaps`。
+
+### 测试 8：模型复盘结构或事实边界无效
+
+临时让 N06 缺少 user_recap，或在 successful_writes 为空时输出非空 state_changes。预期 N07/recap_valid=false→N08（否）→N20，不执行 N09。恢复 N06 输出。
+
+### 测试 9：写入失败
+
+临时清空 N09/session_id 或其他必填映射。预期 N10（否）→N17，消息必须说明复盘未保存。恢复 N09 全部字段。
+
+### 测试 10：回读 SQL 失败和内容不一致
+
+1. 临时把 N11 表名改错：N12（否）→N18；恢复 `session_recaps`。
+2. 临时让 N13/expected_user 引用错误内容：N14（否）→N18；恢复 `expected_user=N07/user_recap_json` 和正确 agent 值。
+
+两种情况都不能确认保存，即使 N09 先前返回 isSuccess=true。
+
+### 11.2 最终留证和主 Agent 接线检查
+
+- 保存 version 1、version 2、空 successful_writes、短文本、写入失败和回读失败截图。
+- DB-11 应保留同一 session 的两个版本，旧版本不被覆盖。
+- 核对主 Agent 调用 WF-12 时确实传入 conversation_text 和 successful_writes_json；它们不是平台自动变量。
+- 确认 N01、N06、N09、N11、N13 的临时错误全部恢复。
 
 ## 12. 验收清单
 
