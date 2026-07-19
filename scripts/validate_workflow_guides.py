@@ -33,6 +33,24 @@ def main() -> int:
         mermaids = re.findall(r"```mermaid\s*\n([\s\S]*?)```", text)
         if not mermaids:
             errors.append(f"{path.name}: missing Mermaid build diagram")
+        image_refs = re.findall(r"!\[[^]]*\]\((images/[^)]+\.png)\)", text)
+        paired_diagrams = re.findall(
+            r"```mermaid\s*\n[\s\S]*?```\s*\n\s*!\[[^]]*\]\(images/[^)]+\.png\)",
+            text,
+        )
+        if len(image_refs) != len(mermaids):
+            errors.append(
+                f"{path.name}: Mermaid/image count mismatch "
+                f"({len(mermaids)} Mermaid blocks, {len(image_refs)} image references)"
+            )
+        # WF-01 intentionally presents each rendered PNG before its Mermaid
+        # source; the rewritten WF-02 through WF-12 guides place it after.
+        if path.name != "WF-01-user-profile.md" and len(paired_diagrams) != len(mermaids):
+            errors.append(f"{path.name}: every Mermaid block must be followed by its PNG image")
+        for image_ref in image_refs:
+            image_path = WORKFLOWS / image_ref
+            if not image_path.is_file() or image_path.stat().st_size == 0:
+                errors.append(f"{path.name}: missing or empty image {image_ref}")
         for diagram_index, diagram in enumerate(mermaids, start=1):
             message_ids = set(re.findall(r'\b([A-Za-z]\w*)\[["\']?[^\]\n]*消息', diagram))
             edge_text = re.sub(

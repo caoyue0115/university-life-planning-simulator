@@ -35,6 +35,8 @@ flowchart LR
     N64 --> N65
 ```
 
+![WF-10 流程图 1](images/WF-10-decision-and-trial-01.png)
+
 N01 输入 `user_input=N00/AGENT_USER_INPUT`、`trial_id=N00/trial_id`，输出：
 
 | 变量 | 类型 | 描述 |
@@ -59,6 +61,8 @@ flowchart LR
     N09 --> N65["N65 公共结束"]
     N10 --> N65
 ```
+
+![WF-10 流程图 2](images/WF-10-decision-and-trial-02.png)
 
 N04 模型 `Spark4.0 Ultra`，关闭历史。输入 `user_input=N00/AGENT_USER_INPUT`、`topic=N01/decision_topic`。系统提示词：
 
@@ -95,6 +99,8 @@ flowchart LR
     N18 --> N65
     N19 --> N65
 ```
+
+![WF-10 流程图 3](images/WF-10-decision-and-trial-03.png)
 
 N11 输入 user_input/topic。系统提示词要求：每天 10～60 分钟、只收集验证决策所需证据、包含退出条件、安全边界和第七天复盘标准；只输出 `{"trial_plan":{},"reply":""}`。
 
@@ -137,6 +143,8 @@ flowchart LR
     N28 --> N65
     N29 --> N65
 ```
+
+![WF-10 流程图 4](images/WF-10-decision-and-trial-04.png)
 
 N20 自定义 SQL，输入 uid 和 trial_id：
 
@@ -184,6 +192,8 @@ flowchart LR
     N42 --> N65
     N43 --> N65
 ```
+
+![WF-10 流程图 5](images/WF-10-decision-and-trial-05.png)
 
 N30 选择自定义 SQL，输入 `uid=N00/uid`、`trial_id=N00/trial_id`：
 
@@ -247,6 +257,8 @@ flowchart LR
     N57 --> N65
     N58 --> N65
 ```
+
+![WF-10 流程图 6](images/WF-10-decision-and-trial-06.png)
 
 N44 自定义 SQL，输入 uid、trial_id：
 
@@ -312,6 +324,8 @@ flowchart LR
     N60 -->|是| N61["N61 消息：试错已停止"] --> N65["N65 公共结束"]
     N60 -->|否| N62["N62 消息：停止失败"] --> N65
 ```
+
+![WF-10 流程图 7](images/WF-10-decision-and-trial-07.png)
 
 N63 安全消息：`这个请求可能涉及人身安全、严重健康或违法风险。我不能把它当作普通七天试错。请立即停止相关行动，并联系可信任的人或当地专业/紧急支持。`
 

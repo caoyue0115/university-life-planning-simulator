@@ -38,6 +38,8 @@ flowchart LR
     N26 --> N30
 ```
 
+![WF-08 流程图 1](images/WF-08-growth-review-01.png)
+
 ```mermaid
 flowchart LR
     N09 --> N10["N10 变量提取器：提取复盘"]
@@ -64,6 +66,8 @@ flowchart LR
     N28 --> N30
     N29 --> N30
 ```
+
+![WF-08 流程图 2](images/WF-08-growth-review-02.png)
 
 所有消息连接 N30 结束。
 

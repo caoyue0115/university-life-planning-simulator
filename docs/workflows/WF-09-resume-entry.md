@@ -32,6 +32,8 @@ flowchart LR
     N33 --> N42["N42 公共结束"]
 ```
 
+![WF-09 流程图 1](images/WF-09-resume-entry-01.png)
+
 ```mermaid
 flowchart LR
     N06 --> N07{"N07 分支器：同类履历读取成功？"}
@@ -60,6 +62,8 @@ flowchart LR
     N37 --> N42
 ```
 
+![WF-09 流程图 2](images/WF-09-resume-entry-02.png)
+
 ```mermaid
 flowchart LR
     N21 --> N22{"N22 分支器：确认有效？"}
@@ -80,6 +84,8 @@ flowchart LR
     N41 --> N42
 ```
 
+![WF-09 流程图 3](images/WF-09-resume-entry-03.png)
+
 取消：N29→N30“取消成功？”→N31 成功或 N32 失败。所有消息连接 N42 结束。
 
 ```mermaid
@@ -88,6 +94,8 @@ flowchart LR
     N30 -->|是| N31["N31 消息：已取消"] --> N42["N42 公共结束"]
     N30 -->|否| N32["N32 消息：取消失败"] --> N42
 ```
+
+![WF-09 流程图 4](images/WF-09-resume-entry-04.png)
 
 ## 3. N01～N03：读取 pending 履历
 

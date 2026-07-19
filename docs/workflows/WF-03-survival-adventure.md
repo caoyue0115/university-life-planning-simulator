@@ -31,6 +31,8 @@ flowchart LR
     N29 --> N28["N28 公共结束"]
 ```
 
+![WF-03 流程图 1](images/WF-03-survival-adventure-01.png)
+
 ### 3.2 生成题目
 
 ```mermaid
@@ -44,6 +46,8 @@ flowchart LR
     N10 --> N28["N28 公共结束"]
     N11 --> N28
 ```
+
+![WF-03 流程图 2](images/WF-03-survival-adventure-02.png)
 
 ### 3.3 结算答案并完成测试
 
@@ -70,6 +74,8 @@ flowchart LR
     N26 --> N28
     N27 --> N28
 ```
+
+![WF-03 流程图 3](images/WF-03-survival-adventure-03.png)
 
 所有消息节点连接 N28 结束，没有悬空出口。
 

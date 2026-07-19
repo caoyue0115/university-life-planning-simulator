@@ -61,6 +61,8 @@ flowchart LR
     N31 --> N29
 ```
 
+![WF-07 流程图 1](images/WF-07-semester-tasks-01.png)
+
 N06、N13、N22～N28、N31 都连接 N29 结束。
 
 ## 3. N01/N02：识别操作

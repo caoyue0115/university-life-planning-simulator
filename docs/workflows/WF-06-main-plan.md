@@ -35,6 +35,8 @@ flowchart LR
     N32 --> N41["N41 公共结束"]
 ```
 
+![WF-06 流程图 1](images/WF-06-main-plan-01.png)
+
 ### 2.2 生成草稿
 
 ```mermaid
@@ -59,6 +61,8 @@ flowchart LR
     N34 --> N41
     N35 --> N41
 ```
+
+![WF-06 流程图 2](images/WF-06-main-plan-02.png)
 
 ### 2.3 确认、归档旧版、激活和回读
 
@@ -86,6 +90,8 @@ flowchart LR
     N39 --> N41
 ```
 
+![WF-06 流程图 3](images/WF-06-main-plan-03.png)
+
 取消路径：N29→N30“取消成功？”→是 N31“已取消”，否 N40“取消失败”。所有消息连接 N41 结束。
 
 ```mermaid
@@ -94,6 +100,8 @@ flowchart LR
     N30 -->|是| N31["N31 消息：已取消"] --> N41["N41 公共结束"]
     N30 -->|否| N40["N40 消息：取消失败"] --> N41
 ```
+
+![WF-06 流程图 4](images/WF-06-main-plan-04.png)
 
 ## 3. N01～N03：读取并整理规划状态
 

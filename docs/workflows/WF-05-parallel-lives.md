@@ -36,6 +36,8 @@ flowchart LR
     N13 --> N14
 ```
 
+![WF-05 流程图 1](images/WF-05-parallel-lives-01.png)
+
 N04、N09、N12、N13 全部连接 N14 结束。
 
 ## 4. N00 开始

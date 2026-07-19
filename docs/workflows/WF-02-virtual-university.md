@@ -47,6 +47,8 @@ flowchart LR
     N25 --> N24["N24 公共结束"]
 ```
 
+![WF-02 流程图 1](images/WF-02-virtual-university-01.png)
+
 ### 3.2 没有待回答事件：生成并保存事件
 
 ```mermaid
@@ -60,6 +62,8 @@ flowchart LR
     N10 --> N24["N24 公共结束"]
     N11 --> N24
 ```
+
+![WF-02 流程图 2](images/WF-02-virtual-university-02.png)
 
 ### 3.3 有待回答事件：校验、结算和保存
 
@@ -81,6 +85,8 @@ flowchart LR
     N22 --> N24
     N23 --> N24
 ```
+
+![WF-02 流程图 3](images/WF-02-virtual-university-03.png)
 
 所有消息节点 N10、N11、N14、N20、N22、N23、N25 都连接 N24 结束。图中没有任何悬空出口。
 

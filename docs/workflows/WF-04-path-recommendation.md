@@ -33,6 +33,8 @@ flowchart LR
     N32 --> N34
 ```
 
+![WF-04 流程图 1](images/WF-04-path-recommendation-01.png)
+
 ### 2.2 检索、生成和校验
 
 ```mermaid
@@ -50,6 +52,8 @@ flowchart LR
     N28 --> N34["N34 公共结束"]
     N33 --> N34
 ```
+
+![WF-04 流程图 2](images/WF-04-path-recommendation-02.png)
 
 ### 2.3 更新、回读和结束
 
@@ -69,6 +73,8 @@ flowchart LR
     N26 --> N34
     N27 --> N34
 ```
+
+![WF-04 流程图 3](images/WF-04-path-recommendation-03.png)
 
 N25～N33 所有消息连接 N34 结束。
 

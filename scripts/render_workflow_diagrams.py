@@ -1,7 +1,9 @@
-"""Render the first Mermaid flowchart in each workflow guide as a PNG.
+"""Render every Mermaid flowchart in each workflow guide as a PNG.
 
 The renderer supports the small flowchart subset used by this repository and
 keeps image generation deterministic without requiring a browser or Mermaid CLI.
+If a guide has Mermaid blocks but no image references yet, matching references
+are inserted directly below the blocks before rendering.
 """
 
 from __future__ import annotations
@@ -140,10 +142,41 @@ def render(nodes, edges, output: Path):
     image.save(output, "PNG", optimize=True)
 
 
+def ensure_image_references(markdown_path: Path, text: str) -> str:
+    """Add one deterministic PNG reference after every Mermaid block."""
+    mermaids = list(re.finditer(r"```mermaid\s*\n[\s\S]*?```", text))
+    image_refs = re.findall(r"!\[[^]]*\]\((images/[^)]+\.png)\)", text)
+    if not mermaids:
+        return text
+    if image_refs:
+        if len(mermaids) != len(image_refs):
+            raise RuntimeError(
+                f"{markdown_path.name}: Mermaid/image count mismatch "
+                f"({len(mermaids)} Mermaid blocks, {len(image_refs)} image references)"
+            )
+        return text
+
+    workflow_id = markdown_path.stem.split("-", 2)[:2]
+    workflow_label = "-".join(workflow_id)
+    index = 0
+
+    def add_reference(match: re.Match[str]) -> str:
+        nonlocal index
+        index += 1
+        image_name = f"{markdown_path.stem}-{index:02d}.png"
+        alt = f"{workflow_label} 流程图 {index}"
+        return f"{match.group(0)}\n\n![{alt}](images/{image_name})"
+
+    updated = re.sub(r"```mermaid\s*\n[\s\S]*?```", add_reference, text)
+    markdown_path.write_text(updated, encoding="utf-8")
+    return updated
+
+
 def main():
     files = sorted([WORKFLOWS / "README.md", *WORKFLOWS.glob("WF-??-*.md")])
     for markdown_path in files:
         text = markdown_path.read_text(encoding="utf-8")
+        text = ensure_image_references(markdown_path, text)
         mermaids = re.findall(r"```mermaid\s*\n([\s\S]*?)```", text)
         image_refs = re.findall(r"!\[[^]]*\]\((images/[^)]+\.png)\)", text)
         if not mermaids or not image_refs:

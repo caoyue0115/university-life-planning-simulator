@@ -39,6 +39,8 @@ flowchart LR
     N14 --> N15
 ```
 
+![WF-11 流程图 1](images/WF-11-micro-habits-01.png)
+
 N10～N14 全部连接 N15 结束。
 
 ## 3. N01 变量提取器：分类和提取

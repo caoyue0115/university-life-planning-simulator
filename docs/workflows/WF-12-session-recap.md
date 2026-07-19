@@ -52,6 +52,8 @@ flowchart LR
     N21 --> N22
 ```
 
+![WF-12 流程图 1](images/WF-12-session-recap-01.png)
+
 所有消息连接 N22 结束。
 
 ## 3. N01/N02：读取本会话最新复盘
