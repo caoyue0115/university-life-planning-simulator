@@ -13,7 +13,7 @@
 - N00 must expose exactly one input: `AGENT_USER_INPUT:String`.
 - The inner payload must be a JSON object containing non-empty String fields `uid` and `user_input`.
 - `confirmation_token` is optional and normalizes to an empty String.
-- `request_time` is optional and falls back to the parser node's current local time in `YYYY-MM-DD HH:mm:ss` format.
+- `request_time` is required inside the single JSON String and must use `YYYY-MM-DD HH:mm:ss`; this supplies the database's required Time field without unsupported imports.
 - Parser failures must return six declared outputs and route to N00C without executing N01.
 - Existing nodes N01 through N30 keep their current numbers.
 - All branches, including invalid entry input, must terminate at N30.
@@ -25,6 +25,8 @@
 
 **Files:**
 - Modify: `docs/workflows/WF-01-user-profile.md`
+- Modify: `docs/workflows/SHARED-CONTRACTS.md`
+- Modify: `docs/workflows/README.md`
 
 **Interfaces:**
 - Consumes: `N00/AGENT_USER_INPUT:String` containing the inner JSON object as text.
@@ -51,41 +53,114 @@ raw_input | 引用 | N00 / AGENT_USER_INPUT
 Use this code:
 
 ```python
-import json
-from datetime import datetime
+def skip_spaces(text, index):
+    while index < len(text) and text[index] in " \t\r\n":
+        index += 1
+    return index
+
+def parse_json_string(text, index):
+    if index >= len(text) or text[index] != '"':
+        raise ValueError("JSON 的键和值都必须使用双引号")
+    index += 1
+    chars = []
+    escapes = {'"':'"', '\\':'\\', '/':'/', 'b':'\b', 'f':'\f', 'n':'\n', 'r':'\r', 't':'\t'}
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            return "".join(chars), index + 1
+        if char == '\\':
+            index += 1
+            if index >= len(text):
+                raise ValueError("JSON 转义字符不完整")
+            escaped = text[index]
+            if escaped == 'u':
+                code = text[index + 1:index + 5]
+                if len(code) != 4:
+                    raise ValueError("JSON Unicode 转义不完整")
+                try:
+                    chars.append(chr(int(code, 16)))
+                except:
+                    raise ValueError("JSON Unicode 转义无效")
+                index += 5
+                continue
+            if escaped not in escapes:
+                raise ValueError("JSON 包含不支持的转义字符")
+            chars.append(escapes[escaped])
+            index += 1
+            continue
+        if ord(char) < 32:
+            raise ValueError("JSON 字符串包含控制字符")
+        chars.append(char)
+        index += 1
+    raise ValueError("JSON 字符串缺少结束双引号")
+
+def parse_flat_string_object(raw_input):
+    if not isinstance(raw_input, str) or raw_input.strip() == "":
+        raise ValueError("AGENT_USER_INPUT 不能为空")
+    text = raw_input
+    index = skip_spaces(text, 0)
+    if index >= len(text) or text[index] != '{':
+        raise ValueError("JSON 顶层必须是对象")
+    index = skip_spaces(text, index + 1)
+    result = {}
+    if index < len(text) and text[index] == '}':
+        index = skip_spaces(text, index + 1)
+        if index != len(text):
+            raise ValueError("JSON 对象结束后不能有其他内容")
+        return result
+    while index < len(text):
+        key, index = parse_json_string(text, index)
+        index = skip_spaces(text, index)
+        if index >= len(text) or text[index] != ':':
+            raise ValueError("JSON 键后缺少冒号")
+        index = skip_spaces(text, index + 1)
+        value, index = parse_json_string(text, index)
+        result[key] = value
+        index = skip_spaces(text, index)
+        if index < len(text) and text[index] == ',':
+            index = skip_spaces(text, index + 1)
+            continue
+        if index < len(text) and text[index] == '}':
+            index = skip_spaces(text, index + 1)
+            if index != len(text):
+                raise ValueError("JSON 对象结束后不能有其他内容")
+            return result
+        raise ValueError("JSON 字段之间缺少逗号或对象缺少结束花括号")
+    raise ValueError("JSON 对象缺少结束花括号")
 
 def main(raw_input):
     uid = ""
     user_input = ""
     confirmation_token = ""
-    request_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    request_time = ""
     error = ""
-
     try:
-        if not isinstance(raw_input, str) or raw_input.strip() == "":
-            raise ValueError("AGENT_USER_INPUT 不能为空")
-        payload = json.loads(raw_input)
-        if not isinstance(payload, dict):
-            raise ValueError("JSON 顶层必须是对象")
-
+        payload = parse_flat_string_object(raw_input)
         uid_value = payload.get("uid", "")
         message_value = payload.get("user_input", "")
         token_value = payload.get("confirmation_token", "")
         time_value = payload.get("request_time", "")
-
         uid = uid_value.strip() if isinstance(uid_value, str) else ""
         user_input = message_value.strip() if isinstance(message_value, str) else ""
         confirmation_token = token_value.strip() if isinstance(token_value, str) else ""
-        if isinstance(time_value, str) and time_value.strip() != "":
-            request_time = time_value.strip()
-
+        request_time = time_value.strip() if isinstance(time_value, str) else ""
         if uid == "":
             raise ValueError("缺少非空字符串字段 uid")
         if user_input == "":
             raise ValueError("缺少非空字符串字段 user_input")
+        valid_time = (
+            len(request_time) == 19
+            and request_time[4] == '-' and request_time[7] == '-'
+            and request_time[10] == ' '
+            and request_time[13] == ':' and request_time[16] == ':'
+            and (request_time[0:4] + request_time[5:7] + request_time[8:10]
+                 + request_time[11:13] + request_time[14:16]
+                 + request_time[17:19]).isdigit()
+        )
+        if not valid_time:
+            raise ValueError("缺少 request_time，或格式不是 YYYY-MM-DD HH:mm:ss")
     except Exception as exc:
         error = str(exc) if str(exc) != "" else "单参数 JSON 解析失败"
-
     return {
         "uid": uid,
         "user_input": user_input,
@@ -162,13 +237,15 @@ N17 request_time       = N00A / request_time
 
 - [ ] **Step 4: Prove removed references are absent**
 
-Run:
+Run this PowerShell check, which removes the explicit old-to-new migration table before searching active configuration text:
 
 ```powershell
-rg -n "N00\s*/\s*(uid|confirmation_token|request_time)|N00\.(uid|confirmation_token|request_time)" docs/workflows/WF-01-user-profile.md
+$text = Get-Content -Raw docs/workflows/WF-01-user-profile.md
+$active = [regex]::Replace($text, '### 5\.5[\s\S]*?(?=\r?\n## 6\.)', '')
+if ($active -match 'N00\s*/\s*(uid|confirmation_token|request_time)|N00\.(uid|confirmation_token|request_time)') { throw 'active config still references removed N00 fields' }
 ```
 
-Expected: no matches.
+Expected: no exception. Exact old references remain only in section 5.5 so the user can migrate an already-built canvas.
 
 - [ ] **Step 5: Check all N00A consumers**
 
@@ -180,12 +257,18 @@ rg -n "N00A\s*/|N00A\." docs/workflows/WF-01-user-profile.md
 
 Expected: references appear for N01, N04, N09, N11, N13, N17, N19, N21, N00B, and N00C.
 
+- [ ] **Step 6: Update shared and MAIN-facing contracts**
+
+Add an explicit WF-01 exception to `SHARED-CONTRACTS.md`: WF-01 only exposes `AGENT_USER_INPUT:String`, and the value is the serialized inner envelope. Add the same rule beside `调用_WF01_用户建档` in `README.md`, and state that WF-02 through WF-12 require their own later migrations before the complete set can be treated as internally callable single-parameter workflows.
+
 ---
 
 ### Task 3: Update diagrams, test cases, and API/MAIN examples
 
 **Files:**
 - Modify: `docs/workflows/WF-01-user-profile.md`
+- Modify: `docs/workflows/SHARED-CONTRACTS.md`
+- Modify: `docs/workflows/README.md`
 - Modify: `docs/workflows/images/WF-01-draft-round.png`
 - Verify: `docs/workflows/images/WF-01-confirm-round.png`
 
@@ -217,7 +300,7 @@ Show both the readable inner object and the outer one-parameter object:
 
 ```json
 {
-  "AGENT_USER_INPUT": "{\"uid\":\"test_user_001\",\"user_input\":\"确认保存\",\"confirmation_token\":\"profile_1_xxx\"}"
+  "AGENT_USER_INPUT": "{\"uid\":\"test_user_001\",\"user_input\":\"确认保存\",\"confirmation_token\":\"profile_1_xxx\",\"request_time\":\"2026-07-19 16:55:00\"}"
 }
 ```
 
@@ -266,10 +349,12 @@ Run:
 
 ```powershell
 git diff --check
-rg -n "N00\s*/\s*(uid|confirmation_token|request_time)|N00\.(uid|confirmation_token|request_time)" docs/workflows/WF-01-user-profile.md
+$text = Get-Content -Raw docs/workflows/WF-01-user-profile.md
+$active = [regex]::Replace($text, '### 5\.5[\s\S]*?(?=\r?\n## 6\.)', '')
+if ($active -match 'N00\s*/\s*(uid|confirmation_token|request_time)|N00\.(uid|confirmation_token|request_time)') { throw 'active config still references removed N00 fields' }
 ```
 
-Expected: both commands exit without errors and the search returns no matches.
+Expected: both checks exit without errors; old references are confined to the migration table.
 
 - [ ] **Step 3: Review the complete diff against the design**
 

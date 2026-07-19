@@ -37,7 +37,7 @@ WF-01 对外只接收一条 JSON 字符串。调用方把业务字段放进 `AGE
 | `uid` | String | 是 | 去除首尾空格后不得为空；数据库按此字段隔离用户。 |
 | `user_input` | String | 是 | 用户本轮真正说的话；去除首尾空格后不得为空。 |
 | `confirmation_token` | String | 否 | 首次建档、修改和取消时允许为空；确认轮传上一轮返回值。 |
-| `request_time` | String | 否 | 推荐格式 `YYYY-MM-DD HH:mm:ss`；缺失时由解析代码生成当前时间。 |
+| `request_time` | String | 是 | 格式必须为 `YYYY-MM-DD HH:mm:ss`；数据库必填 Time 字段依赖此值。 |
 
 不采用分隔符字符串，因为用户文本可能包含相同分隔符；不采用大模型提取 uid 和 token，因为身份与确认凭证不能依赖概率判断。
 
@@ -78,11 +78,11 @@ raw_input = N00 / AGENT_USER_INPUT
 | `uid` | String | N01、N09、N11、N13、N19、N21 使用。 |
 | `user_input` | String | N04 大模型使用。 |
 | `confirmation_token` | String | N17 确认校验使用。 |
-| `request_time` | String | N09、N17 和数据库时间字段使用。 |
+| `request_time` | String | N09、N17 和数据库时间字段使用；由调用方在单参数 JSON 内提供。 |
 | `input_valid` | Boolean | N00B 判断是否允许进入数据库。 |
 | `input_error` | String | N00C 给出可操作的格式错误。 |
 
-解析必须捕获所有异常，并始终返回上述六个同名键，不允许代码节点因坏 JSON 直接中断整个工作流。
+平台代码节点不使用 `import`。N00A 使用内置字符串操作解析“顶层对象且所有值均为 String”的固定 JSON 契约，并校验 `request_time` 格式。解析必须捕获所有异常，并始终返回上述六个同名键，不允许代码节点因坏 JSON 直接中断整个工作流。
 
 ### N00B
 
@@ -140,7 +140,7 @@ API 或 MAIN 的外层调用仍只有一个参数：
 
 ```json
 {
-  "AGENT_USER_INPUT": "{\"uid\":\"test_user_001\",\"user_input\":\"确认保存\",\"confirmation_token\":\"profile_1_xxx\"}"
+  "AGENT_USER_INPUT": "{\"uid\":\"test_user_001\",\"user_input\":\"确认保存\",\"confirmation_token\":\"profile_1_xxx\",\"request_time\":\"2026-07-19 16:55:00\"}"
 }
 ```
 
@@ -153,14 +153,14 @@ API 或 MAIN 的外层调用仍只有一个参数：
 - `uid` 缺失或为空：N00A 返回 `input_valid=false`，不得使用 `anonymous` 代替。
 - `user_input` 缺失或为空：N00A 返回 `input_valid=false`。
 - 可选 token 缺失：统一输出空字符串。
-- 时间缺失：N00A 生成当前时间。
+- `request_time` 缺失或格式错误：N00A 返回 `input_valid=false`，不得进入数据库。
 - 后续数据库、模型解析和确认错误继续沿用现有 N28、N29、N27 等业务错误分支。
 
 ## 验收标准
 
 - N00 只有 `AGENT_USER_INPUT` 一个输入。
 - 入口解析失败不会执行 N01。
-- `WF-01-user-profile.md` 正文不存在 `N00/uid`、`N00/confirmation_token` 或 `N00/request_time`。
+- `WF-01-user-profile.md` 的有效节点配置不存在 `N00/uid`、`N00/confirmation_token` 或 `N00/request_time`；这些旧写法只允许出现在“旧画布逐项修改总表”的“旧值”列。
 - N04 只接收解包后的 `user_input`，不接收整段包装 JSON。
 - 新增记录时 `uid` 明确来自 N00A。
 - 草稿、修改、确认、取消和错误 token 路径仍有明确终点。

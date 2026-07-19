@@ -18,6 +18,29 @@
 
 开始节点不能新增输入时，把 `uid`、`session_id`、`intent`、`context_json` 由主 Agent 放入调用参数；若平台也不支持调用参数，则本轮只运行无写入的演示版，并返回 `missing_user_id`。
 
+### 1.1 WF-01 已采用单参数入口
+
+WF-01 不再在开始节点单独增加 `uid`、`confirmation_token`、`request_time`。它只保留 `AGENT_USER_INPUT:String`，其值是下面对象序列化后的 JSON 字符串：
+
+```json
+{
+  "uid": "test_user_001",
+  "user_input": "我是大一学生，想建立画像",
+  "confirmation_token": "",
+  "request_time": "2026-07-19 16:30:00"
+}
+```
+
+WF-01 的 N00A 代码节点负责解析、校验并输出这些业务字段；`uid`、`user_input`、`request_time` 必填，`request_time` 格式必须为 `YYYY-MM-DD HH:mm:ss`。输入无效时必须在数据库读取前结束。MAIN 或 API 调用 WF-01 时，外层仍只传一项：
+
+```json
+{
+  "AGENT_USER_INPUT": "{\"uid\":\"test_user_001\",\"user_input\":\"我是大一学生，想建立画像\",\"confirmation_token\":\"\",\"request_time\":\"2026-07-19 16:30:00\"}"
+}
+```
+
+这里的外层值必须是 String。生产环境的 `uid` 必须由可信 MAIN、后端或平台身份映射写入包装 JSON，不能直接采用用户在自然语言中自报的 uid。WF-02～WF-12 在完成各自的单参数改造前，仍以对应工作流教程为准，不能直接照抄 WF-01 的内部字段。
+
 ## 2. 统一结束输出
 
 结束节点输出一个 `result_json`，结构如下：
