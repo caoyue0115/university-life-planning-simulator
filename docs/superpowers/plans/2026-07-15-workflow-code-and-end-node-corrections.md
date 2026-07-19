@@ -57,4 +57,4 @@
 - [x] Verify no Python block contains import statements or `None` returns.
 - [x] Extract and compile every Python block.
 - [x] Verify each guide contains the shared end-node settings and no dangling terminal description.
-- [ ] Review the git diff, commit, and push the documentation update.
+- [x] Review the git diff, commit, and push the documentation update.
