@@ -10,11 +10,30 @@ from render_workflow_diagrams import parse_flowchart
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / "docs" / "workflows"
+EXPECTED_FILES = {
+    "WF-01-user-profile.md",
+    "WF-02-virtual-university.md",
+    "WF-03-survival-adventure.md",
+    "WF-04-path-recommendation.md",
+    "WF-05-direction-and-main-plan.md",
+    "WF-06-semester-actions.md",
+    "WF-07-review-and-recap.md",
+    "WF-08-resume-evidence.md",
+    "WF-09-decision-trial.md",
+}
 
 
 def main() -> int:
     errors: list[str] = []
     files = sorted(WORKFLOWS.glob("WF-??-*.md"))
+    actual_files = {path.name for path in files}
+    if actual_files != EXPECTED_FILES:
+        missing = sorted(EXPECTED_FILES - actual_files)
+        extra = sorted(actual_files - EXPECTED_FILES)
+        if missing:
+            errors.append("missing guides: " + ", ".join(missing))
+        if extra:
+            errors.append("unexpected legacy guides: " + ", ".join(extra))
     for path in files:
         text = path.read_text(encoding="utf-8")
         if "```javascript" in text or re.search(r"\b(const|let)\s+\w+\s*=", text):
@@ -82,6 +101,8 @@ def main() -> int:
                 errors.append(f"{path.name}: missing debugging guide")
             if "验收清单" not in text:
                 errors.append(f"{path.name}: missing acceptance checklist")
+        if "result_json:String" not in text:
+            errors.append(f"{path.name}: missing declared result_json:String MCP output")
         if path.name == "WF-04-path-recommendation.md":
             if re.search(r"\|\s*`routes`\s*\|\s*Array(?:<Object>)?\s*\|", text):
                 errors.append(f"{path.name}: variable extractor cannot output routes as an object array")
@@ -99,7 +120,7 @@ def main() -> int:
     if errors:
         print("\n".join(f"ERROR: {item}" for item in errors))
         return 1
-    print(f"PASS: validated {len(files)} workflow guides")
+    print(f"PASS: validated {len(files)} consolidated workflow guides")
     return 0
 
 
