@@ -1,120 +1,357 @@
 # 工作流共享协议
 
-本文是 WF-01～WF-12 的统一契约。页面操作以[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)为准：读取选“自定义 SQL”，新增/更新选“表单处理数据”，条件判断选“分支器”，代码节点只填 Python。
+本文是 `MAIN-00` 和 WF-01～WF-09 的统一运行契约。所有页面配置以[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md)为准；任何单份教程与本文冲突时，先停止搭建并按本文修正文档。
 
-数据库用户隔离统一使用平台自动生成的 `uid`。外部调用若使用其他用户标识名称，必须在进入工作流时先映射成 `uid`；数据库模板不得再创建重复的用户标识字段。每张表的 `id`、`uid`、`create_time` 都由平台自动创建。
+## 1. 运行拓扑
 
-## 1. 开始输入
+```text
+讯飞星火/Desk 用户
+→ MAIN-00（唯一公开入口）
+→ Agent 智能决策节点
+→ WF-01～WF-09（同账号、已发布的 MCP Server）
+→ MAIN-00 最终回复
+```
 
-所有变量使用英文 `snake_case`。
+- MAIN-00 是唯一允许添加 Agent 智能决策和 MCP 工具的工作流。
+- WF-01～WF-09 不得调用其他 Agent、工作流或 MCP，不做多层嵌套。
+- MAIN 可以在一轮内连续调用多个工具；不设人为的 1 次或 2 次上限。
+- 官方页面最多添加 30 个工具、最大推理轮次 100；本项目只使用 9 个工具。
+- 子工具返回 `awaiting_confirmation`、`awaiting_user_input`、`needs_input`、失败或安全状态时，MAIN 必须停止继续调用并先回复用户。
 
-| 变量 | 必需 | 来源 | 说明 |
-|---|---:|---|---|
-| `AGENT_USER_INPUT` | 是 | 开始节点的平台内置输入 | 用户本轮原话，不改名 |
-| `uid` | 是 | 主 Agent/平台用户标识 | 数据隔离键；缺失时禁止读写正式数据 |
-| `session_id` | 建议 | 主 Agent/会话标识 | 中断续接和排错 |
-| `intent` | 否 | 主 Agent | 未提供时由工作流识别 |
-| `context_json` | 否 | 上游工作流或共享状态 | JSON 字符串；不得把别的用户数据传入 |
+## 2. 用户看到的输入
 
-开始节点不能新增输入时，把 `uid`、`session_id`、`intent`、`context_json` 由主 Agent 放入调用参数；若平台也不支持调用参数，则本轮只运行无写入的演示版，并返回 `missing_user_id`。
+用户在发布后的 MAIN 对话框中只输入自然语言，例如：
 
-### 1.1 WF-01 已采用单参数入口
+```text
+我是大一计算机学生，想先梳理一下自己的情况。
+```
 
-WF-01 不再在开始节点单独增加 `uid`、`confirmation_token`、`request_time`。它只保留 `AGENT_USER_INPUT:String`，其值是下面对象序列化后的 JSON 字符串：
+用户不需要也不得被要求输入：
+
+- JSON；
+- `uid` 或 `user_key`；
+- `request_time`；
+- `assessment_id`、`plan_id`、`task_id` 等业务键；
+- confirmation token 或恢复码；
+- 上一张工作流输出的完整 JSON。
+
+## 3. 子工作流唯一开始参数
+
+WF-01～WF-09 的开始节点只保留平台默认项：
+
+```text
+AGENT_USER_INPUT:String
+```
+
+不要点击“+ 添加”创建其他开始变量。MAIN 调用 MCP 工具时，把内部档案键和用户原话组成一个扁平 JSON 字符串，作为唯一参数的值：
 
 ```json
 {
-  "uid": "test_user_001",
-  "user_input": "我是大一学生，想建立画像",
-  "confirmation_token": "",
-  "request_time": "2026-07-19 16:30:00"
+  "user_key": "uk_0123456789abcdef0123456789abcdef",
+  "user_input": "用户本轮自然语言"
 }
 ```
 
-WF-01 的 N00A 代码节点负责解析、校验并输出这些业务字段；`uid`、`user_input`、`request_time` 必填，`request_time` 格式必须为 `YYYY-MM-DD HH:mm:ss`。输入无效时必须在数据库读取前结束。MAIN 或 API 调用 WF-01 时，外层仍只传一项：
+MCP 工具参数示意：
 
 ```json
 {
-  "AGENT_USER_INPUT": "{\"uid\":\"test_user_001\",\"user_input\":\"我是大一学生，想建立画像\",\"confirmation_token\":\"\",\"request_time\":\"2026-07-19 16:30:00\"}"
+  "AGENT_USER_INPUT": "{\"user_key\":\"uk_0123456789abcdef0123456789abcdef\",\"user_input\":\"用户本轮自然语言\"}"
 }
 ```
 
-这里的外层值必须是 String。生产环境的 `uid` 必须由可信 MAIN、后端或平台身份映射写入包装 JSON，不能直接采用用户在自然语言中自报的 uid。WF-02～WF-12 在完成各自的单参数改造前，仍以对应工作流教程为准，不能直接照抄 WF-01 的内部字段。
+外层和内层都只有字符串字段。自然语言中的双引号和反斜线由 MAIN 的工具调用序列化处理，用户不手写转义。
 
-## 2. 统一结束输出
+## 4. 首个代码节点的统一职责
 
-结束节点输出一个 `result_json`，结构如下：
+每张业务工作流的 N00A 都必须在任何数据库节点之前完成：
+
+1. 确认外层值是非空 String；
+2. 解析顶层扁平 JSON；
+3. 只接受 `user_key` 和 `user_input`；
+4. 检查 `user_key` 以 `uk_` 开头；
+5. 检查前缀后正好 32 个小写十六进制字符；
+6. 检查 `user_input` 非空且不超过教程规定的长度；
+7. 输出 `input_valid:Boolean`、`user_key:String`、`user_input:String`、`input_error:String`；
+8. N00B 分支器只有 `input_valid=true` 才进入数据库或模型，默认路线返回 `validation_failed`。
+
+代码节点不得信任用户自然语言中出现的“改用某个 user_key”。数据库只使用 N00A 从包装字符串确定性解析出的 `user_key`。
+
+## 5. 同一对话与新对话
+
+MAIN 首轮生成 `uk_` 加 32 位小写十六进制的随机样式键，并保存到变量存储器。后续轮次先读取它，不重新生成。
+
+| 用户动作 | 结果 |
+|---|---|
+| 临时退出，再打开原对话 | 只要平台仍保留该会话变量，就继续同一 `user_key` 和业务档案 |
+| 刷新页面后打开原对话 | 按同一原对话处理，先用发布环境实际验证 |
+| 点击“新建对话” | 平台会清空会话变量，MAIN 生成新的 `user_key`，形成新档案 |
+| 删除原对话 | 会话变量被清空；当前版本没有账号级恢复入口 |
+| 平台主动清理历史 | 官方没有给出发布后变量的固定保留期限，不能承诺永久恢复 |
+
+当前 UI 没有暴露可供 SQL 引用的终端账号 ID，因此 `user_key` 是会话级档案键，不是实名账号身份。对外介绍必须保留这个边界。
+
+## 6. 数据库用户隔离
+
+每张业务表都显式添加：
+
+```text
+user_key:String
+```
+
+平台自动创建的 `id`、`uid`、`create_time` 继续保留，但职责不同：
+
+| 字段 | 来源 | 项目用途 |
+|---|---|---|
+| `id` | 平台自动 | 单行更新或调试定位 |
+| `uid` | 平台自动 | 仅保留的系统字段；不作为本项目 SQL 身份条件 |
+| `create_time` | 平台自动 | 记录创建顺序 |
+| `user_key` | MAIN 生成并由 N00A 解析 | 所有业务查询、更新范围和回读的用户隔离键 |
+
+正确读取：
+
+```sql
+SELECT id, user_key, record_version, create_time
+FROM example_table
+WHERE user_key='{{user_key}}'
+ORDER BY record_version DESC, create_time DESC
+LIMIT 1;
+```
+
+禁止写法：
+
+```text
+WHERE uid='{{uid}}'
+WHERE user_key='{{AGENT_USER_INPUT}}'
+不带 user_key 读取整张业务表
+```
+
+数据库节点输入的 `user_key` 必须引用当前节点上游 N00A 的同名输出；变量下拉框没有 N00A 时，说明节点没有连在有效上游链路上，应先修正连线。
+
+## 7. 时间、版本与业务键
+
+- 开始节点不接收时间。
+- 插入顺序使用平台自动 `create_time`。
+- 业务状态使用 Integer 版本字段，如 `record_version`、`state_version`、`assessment_version`。
+- 新业务键由 `user_key + 固定实体名 + 顺序号` 组成，不依赖时间。
+- 模型不得生成数据库主键、用户键或版本号；这些由代码节点根据回读状态计算。
+- 关键记录优先追加版本。确需更新时，范围至少包含 `user_key`、业务键和当前状态/版本。
+- 更新或正式确认后必须回读；不能只凭数据库节点 `isSuccess=true` 就声称内容一致。
+
+## 8. 数据库固定输出的两层判断
+
+自定义 SQL 和表单处理数据库节点固定输出：
+
+```text
+isSuccess:Boolean
+message:String
+outputList:Array<Object>
+```
+
+判断顺序固定为：
+
+1. 分支器检查 `isSuccess == true`；默认/否进入 `read_failed` 或 `write_failed`。
+2. 成功路线进入代码节点整理 `outputList`。
+3. 代码节点输出 `has_record:Boolean`。
+4. 下一分支器判断有记录或无记录。
+
+`isSuccess=true && outputList=[]` 是“查询执行成功但没有记录”，不是数据库失败。教程和用户回复必须区分两者。
+
+## 9. 变量提取器唯一输入
+
+平台变量提取器只有一个固定输入：
+
+```text
+input｜引用｜上游节点/output
+```
+
+需要多个来源时使用：
+
+```text
+用户原话 + pending JSON + 历史状态
+→ 文本处理节点：字符串拼接
+→ output:String
+→ 变量提取器：input 引用这个 output
+```
+
+推荐拼接规则：
+
+```text
+【用户本轮原话】
+{{user_input}}
+
+【当前待处理对象】
+{{pending_json}}
+
+【已有状态】
+{{state_json}}
+```
+
+变量提取器输出多个字段是允许的；禁止的是为它添加多行输入。完整对象需要保存时输出 String，结构判断字段分别输出 Boolean/String/Integer/Array<String>。
+
+## 10. 大模型与代码边界
+
+### 10.1 大模型
+
+- 负责自然语言意图、生成解释、生成业务草稿；
+- 不负责 `isSuccess` 判断、版本号、用户键、SQL 范围；
+- 状态机工作流关闭对话历史，只使用显式输入；
+- 输出必须先进入变量提取器，再进入代码校验；
+- 政策信息只能基于知识库结果，缺少来源时明确待核验。
+
+### 10.2 代码
+
+- 只使用 Python；
+- 不写 `import`；
+- `main()` 形参和页面输入参数名完全一致；
+- 返回 dict；
+- 所有分支返回同一组键；
+- 页面输出区逐行声明所有返回键和类型；
+- 不解析模型可能嵌套的任意 JSON；需要字段级校验时让变量提取器逐项输出；
+- 只对 MAIN 包装的扁平两字段 JSON 使用教程提供的确定性解析器。
+
+## 11. 决策与分支器
+
+| 判断类型 | 使用节点 |
+|---|---|
+| 用户自然语言要做什么 | 决策节点或变量提取器 |
+| `isSuccess == true` | 分支器 |
+| `has_record == true` | 分支器 |
+| `status` 是否等于枚举值 | 分支器 |
+| 版本号、天数范围 | 代码校验后分支器 |
+
+每个分支器都要配置默认/失败出口。任何未匹配值进入安全失败路线，不能停在画布上，也不能默认为成功。
+
+## 12. 内部确认，不向用户显示 token
+
+需要确认的对象：画像、主规划、重要规划切换、履历正式条目、七天试错启动、删除或不可逆覆盖。
+
+确认依据是数据库中的最新 pending 状态和用户本轮明确意图，不是用户复制 token。确认成功必须满足：
+
+1. 当前 `user_key` 查到对应 pending；
+2. pending 状态和对象类型正确；
+3. 用户明确说出对象和动作；
+4. 写入范围包含 `user_key` 和业务键；
+5. 写后回读一致。
+
+明确确认示例：
+
+```text
+确认保存这份画像
+确认采用这个主规划
+确认保存这条履历
+确认启动七天试错
+```
+
+以下表达不足以触发关键写入：
+
+```text
+好的
+继续
+就这样
+可以吧
+```
+
+模糊表达返回 `needs_input`，并告诉用户可直接说哪一句，不把 token 暴露出来。
+
+## 13. 子工作流结果契约
+
+WF-01～WF-09 的唯一结束输出：
+
+```text
+result_json:String
+```
+
+结构固定为五个顶层 String 字段：
 
 ```json
 {
   "workflow_id": "WF-01",
-  "version": "1.0",
-  "status": "draft",
-  "reply": "给用户看的简短回复",
-  "data": {},
-  "suggested_writes": [],
-  "next_action": "confirm_profile",
-  "error": null
+  "status": "awaiting_confirmation",
+  "reply": "画像草稿已生成，请检查后回复：确认保存这份画像，或直接说明要修改什么。",
+  "next_action": "confirm_or_modify_profile",
+  "error_code": "none"
 }
 ```
 
-| 字段 | 规则 |
-|---|---|
-| `status` | 只能使用下节定义的状态 |
-| `reply` | 手机端可读，先结论后下一步；不能与真实写入结果矛盾 |
-| `data` | 当前工作流的核心产物，如 `profile_json` |
-| `suggested_writes` | 待确认写入项；纯模拟和临时建议不得直接写入 |
-| `next_action` | 主 Agent 下一步路由，完成时可为 `none` |
-| `error` | 无错误为 `null`；有错包含 `code`、`message`、`retryable` |
+允许状态：
 
-## 3. 状态机与确认规则
+| 状态 | 含义 | MAIN 是否可继续调用其他工具 |
+|---|---|---:|
+| `needs_input` | 缺少必要事实或明确选择 | 否 |
+| `awaiting_user_input` | 多轮事件/问题已保存，等待下一轮 | 否 |
+| `awaiting_confirmation` | 草稿已保存，等待明确确认或修改 | 否 |
+| `completed` | 无需持久化的当前目标完成 | 可以，若用户原请求还有明确后续 |
+| `write_succeeded` | 写入并回读一致 | 可以，若用户原请求还有明确后续 |
+| `write_failed` | 写入或回读失败 | 否 |
+| `read_failed` | 数据库读取失败 | 否 |
+| `validation_failed` | 输入、模型或业务结构无效 | 否 |
+| `unsafe_request` | 高风险或不允许的请求 | 否 |
 
-| 状态 | 精确定义 |
-|---|---|
-| `read_succeeded` | 已按当前 `uid` 读取所需状态；不代表生成或写入完成 |
-| `read_failed` | 读取报错或无法证明用户隔离；停止正式数据处理 |
-| `draft` | 已生成草稿，未请求确认、未写入 |
-| `awaiting_confirmation` | 已展示将写内容，等待用户明确确认或修改 |
-| `confirmed` | 本轮收到明确确认，但尚未证明写入成功 |
-| `validation_failed` | 结构或业务校验失败；不得进入写入 |
-| `validation_succeeded` | 结构与业务规则均通过；不代表已保存 |
-| `needs_input` | 缺少继续执行所需的用户字段或选择；`next_action` 必须说明要补什么 |
-| `error` | 非读写类、无法由当前流程恢复的执行错误；必须提供 `error.code` 和安全说明 |
-| `write_succeeded` | 数据库/长期记忆写入节点成功，且后续检查确认成功 |
-| `write_failed` | 写入报错、无成功标志、或回读不一致 |
-| `awaiting_user_input` | 已保存可续接草稿、事件或问题，等待下一轮输入 |
-| `completed` | 核心产物已生成并校验通过；要求持久化时还须证明写入成功 |
+`reply` 只放用户需要看到的内容；完整业务对象写数据库，不通过 MCP 输出整份大 JSON。
 
-“好的”“继续”等模糊表达不得当作关键确认。确认内容至少含目标对象和动作，例如“确认保存这份画像”。保存用户画像、主规划、重要履历，覆盖/切换计划和删除记录都必须先确认。修改后产生新草稿，状态重新变为 `awaiting_confirmation`。
+## 14. MAIN 连续调用规则
 
-写入节点后必须接“分支器”检查数据库固定输出 `isSuccess`；成功分支需要严格等于 `true`。若还要核对业务字段，使用第二个“数据库”按 `uid + record_key` 回读并比较 `record_version`。无法回读时只能返回 `confirmed` 或 `write_failed`，不能说“保存成功”。
+MAIN 的 Agent 智能决策可以根据同一请求连续调用多个 MCP 工具，例如：
 
-纯模拟可以写入 `simulation_state`、`adventure_state` 等续接状态并返回 `awaiting_user_input`；这不是关键规划确认。续接状态必须与 `main_plan`、`user_profile` 分键，模拟过程和结果均不得覆盖正式画像或主规划。
-
-## 4. 错误结构与通用分支
-
-```json
-{"code":"missing_user_id","message":"缺少用户标识，本轮未保存。","retryable":true}
+```text
+“我完成了这周的项目任务，成果链接是……，顺便帮我复盘。”
+→ WF-06 记录任务行动
+→ WF-07 基于已写入证据复盘
+→ MAIN 汇总回复
 ```
 
-推荐错误码：`missing_input`、`missing_user_id`、`invalid_json`、`missing_required_field`、`knowledge_unavailable`、`write_failed`、`read_failed`、`unsafe_request`。错误分支仍需进入“结束”，保留可读 `reply` 和可执行 `next_action`。
+但以下请求必须分轮：
 
-大模型输出必须先经“变量提取器”提取，再经 Python“代码”节点补空值、校验枚举，最后进入“分支器/数据库”。解析失败允许大模型重试一次；仍失败返回 `invalid_json`，不得写入。
+```text
+“帮我建立画像，再直接生成正式主规划。”
+→ WF-01 先生成画像草稿并返回 awaiting_confirmation
+→ MAIN 停止，等待用户确认
+→ 下一轮确认成功后再继续后续工具
+```
 
-## 5. 共享存储键
+停止条件：任务完成、缺输入、等待确认、等待多轮回答、失败、安全边界、继续调用无新增价值、接近超时。
 
-逻辑实体建议使用：`user_profile`、`simulation_state`、`adventure_result`、`route_recommendation`、`parallel_versions`、`main_plan`、`semester_tasks`、`action_records`、`resume_entries`、`growth_reviews`、`decision_trials`、`habit_logs`、`session_recaps`。
+## 15. 失败与异常路线
 
-每条正式记录至少包含：`uid`、`record_key`、`record_version`、`created_at`、`updated_at`、`source_workflow`、`data_json`。平台数据表自动字段为 `id`、`uid`、`create_time`；业务需要的 `created_at/updated_at` 由开始节点或主 Agent 传入。取不到时间就留空并在 `error` 中提示，不伪造时间。
+统一错误码：
 
-数据库读取：模式选“自定义 SQL”，输入区声明 SQL 中的 `{{变量名}}`，固定输出为 `isSuccess/message/outputList`。数据库新增/更新：模式选“表单处理数据”，选择 `university / 表名`，再按“设置新增数据”或“设置数据范围 + 设置更新数据”逐字段引用。若目标操作无法配置，降级为“长期记忆检索/长期记忆写入”，记忆键使用 `uid:record_key`；若用户隔离能力无法确认，只可跑无写入版。
+- `invalid_envelope`
+- `invalid_user_key`
+- `missing_user_input`
+- `read_failed`
+- `write_failed`
+- `readback_mismatch`
+- `invalid_model_output`
+- `missing_prerequisite`
+- `ambiguous_confirmation`
+- `unsafe_request`
+- `tool_unavailable`
 
-画像字段中的 `self_reported`（自评）、`agent_inferred`（Agent 推断）、`behavior_verified`（行为已验证）必须分开；推断不得冒充事实。政策类知识需带来源、更新时间和“请以学校/主管部门官方渠道为准”。
+所有异常路线都要先整理五字段 `result_json`，再进入结束节点。错误回复不能包含数据库 SQL、其他记录、内部 user_key、模型思考过程或平台密钥。
 
-## 6. 通用调试门禁
+## 16. 发布与调试门禁
 
-1. 用两个不同 `uid` 测试，确认互不可读。
-2. 让大模型返回缺字段或非 JSON，确认不会进入写入。
-3. 模拟用户未确认，确认 `suggested_writes` 可返回但数据库不变化。
-4. 模拟写入失败，确认状态为 `write_failed` 且回复不含“已保存”。
-5. 检查娱乐模拟、临时建议与正式画像/主规划使用不同 `record_key`。
+每张业务工作流完成以下检查后才发布为 MCP Server：
+
+1. 开始节点只有 `AGENT_USER_INPUT:String`。
+2. 格式错误在首次数据库读取前结束。
+3. 所有 SQL 都含 `user_key` 条件。
+4. 每个变量提取器只有一个 input。
+5. 每个代码块可编译、无 import、形参与页面输入一致。
+6. 每个分支器的命中路线和默认路线都实际跑过。
+7. 写入失败时回复不含“已保存”。
+8. 回读不一致时状态为 `write_failed`。
+9. 结束输出是紧凑 `result_json`，不是 `workflow_finished`。
+10. 子工作流画布没有 Agent 智能决策、工作流节点或 MCP 调用。
+
+MAIN 发布到星火/Desk 前再完成：
+
+1. 九个 MCP 工具都来自当前账号已发布列表。
+2. 工具说明写清适用场景、前置条件和停止状态。
+3. 同一原对话连续三轮保持相同档案。
+4. 新建对话生成不同档案。
+5. 一轮单工具测试通过。
+6. 一轮双工具连续调用测试通过。
+7. 等待确认时没有越过边界继续调用。
+8. 在“发布管理 → 详情 → Trace”核对真实工具调用顺序。

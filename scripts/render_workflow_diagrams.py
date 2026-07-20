@@ -28,9 +28,12 @@ EDGE_PATTERN = re.compile(
 
 
 def clean_label(shape: str) -> tuple[str, str]:
+    label = shape[1:-1]
+    if len(label) >= 2 and label[0] in {'"', "'"} and label[-1] == label[0]:
+        label = label[1:-1]
     if shape.startswith("{"):
-        return shape[1:-1], "decision"
-    return shape[1:-1], "process"
+        return label, "decision"
+    return label, "process"
 
 
 def parse_flowchart(source: str):
@@ -173,7 +176,11 @@ def ensure_image_references(markdown_path: Path, text: str) -> str:
 
 
 def main():
-    files = sorted([WORKFLOWS / "README.md", *WORKFLOWS.glob("WF-??-*.md")])
+    files = sorted([
+        WORKFLOWS / "README.md",
+        WORKFLOWS / "MAIN-00-agent-orchestrator.md",
+        *WORKFLOWS.glob("WF-??-*.md"),
+    ])
     for markdown_path in files:
         text = markdown_path.read_text(encoding="utf-8")
         text = ensure_image_references(markdown_path, text)
