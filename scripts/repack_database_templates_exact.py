@@ -8,13 +8,14 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
+import os
 import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = Path(r"D:\DB_TABLE_导入模板.xlsx")
 OUTPUT_DIR = ROOT / "docs" / "database" / "import-templates"
-SOURCE_DIR = ROOT / ".tmp-artifact-templates"
+SOURCE_DIR = Path(os.environ.get("DB_SOURCE_DIR", str(ROOT / ".tmp-artifact-templates")))
 SHEET = "xl/worksheets/sheet1.xml"
 NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 

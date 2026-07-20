@@ -1,66 +1,142 @@
-# WF-01～WF-12 数据库节点映射
+# MAIN/WF 数据库节点映射
 
-本表是各工作流数据库配置的总索引。具体点击和 SQL 放在各 WF 文件的“数据库与输入输出配置教程”章节。
+## 1. 公共输入输出
 
-## 公共输入输出
+所有 WF-01～WF-09：
 
-| 名称 | 来源/含义 |
-|---|---|
-| `uid` | 平台系统用户标识；调试时临时使用 `test_user_001` |
-| `AGENT_USER_INPUT` | 开始节点的用户原话 |
-| `isSuccess` | SQL 或表单操作是否执行成功 |
-| `message` | 失败原因或平台执行说明 |
-| `outputList` | 查询返回的记录数组；空数组表示没有记录 |
+```text
+开始：AGENT_USER_INPUT:String
+N00A：user_key:String、user_input:String、input_valid:Boolean、input_error:String
+结束：result_json:String
+```
 
-## 节点映射
+所有数据库节点输入中的 `user_key` 只能引用当前工作流 N00A 或其原样透传输出。平台自动 `uid` 不作为业务参数。
 
-| WF | 数据库节点 | 表 | 操作 | 必要输入 | 主要输出/用途 |
-|---|---|---|---|---|---|
-| WF-01 / N01 | 读取正式画像及待确认草稿 | `user_profiles` | 自定义 SQL 查询 | `N00.uid` | `isSuccess,message,outputList` |
-| WF-01 / N11 | 更新待确认画像 | `user_profiles` | 表单处理数据：更新 | 范围：`N03.record_id,N00.uid`；更新：`N09.pending_profile_json,N09.new_confirmation_token,N09.pending_status,N09.updated_at` | `isSuccess,message,outputList` |
-| WF-01 / N13 | 新建待确认画像 | `user_profiles` | 表单处理数据：新增 | `N09.pending_profile_json,N09.new_confirmation_token,N09.pending_status,N09.updated_at`；正式画像 `{}`；版本 `0` | `isSuccess,message,outputList` |
-| WF-01 / N19 | 确认并写入正式画像 | `user_profiles` | 表单处理数据：更新 | 范围：`N03.record_id,N00.uid,N03.stored_confirmation_token`；更新：`N03.pending_profile_json,N17.next_record_version,N17.confirmed_at` | `isSuccess,message,outputList` |
-| WF-01 / N21 | 回读正式画像 | `user_profiles` | 自定义 SQL 查询 | `N00.uid` | `isSuccess,message,outputList`，交给 N23 核验 |
-| WF-02 | 读取模拟状态 | `simulation_states` | 查询 | `uid,workflow_id=WF-02` | `state_json,pending_item_json` |
-| WF-02 | 保存待回答事件 | `simulation_states` | 插入或更新 | `uid,state_id,pending_item_json` | 下一轮续接 |
-| WF-02 | 更新模拟状态 | `simulation_states` | 更新 | `uid,state_id,state_json` | 保存结算结果 |
-| WF-03 | 读取测试状态 | `simulation_states` | 查询 | `uid,workflow_id=WF-03` | 当前题目、序号和答案 |
-| WF-03 | 保存题目/答案状态 | `simulation_states` | 插入或更新 | `uid,state_id,state_json` | 下一轮续接 |
-| WF-03 | 保存测试结果 | `route_assessments` | 插入 | `uid,assessment_id,adventure_result_json` | 供 WF-04 使用 |
-| WF-04 | 读取画像 | `user_profiles` | 查询 | `uid` | `profile_json` |
-| WF-04 | 读取测试结果 | `route_assessments` | 查询 | `uid,assessment_id` | `adventure_result_json` |
-| WF-04 | 保存路径推荐 | `route_assessments` | 更新或插入 | `uid,assessment_id,route_recommendation_json` | 推荐历史 |
-| WF-05 | 读取画像与推荐 | `user_profiles`、`route_assessments` | 查询 | `uid` | 平行版本共同基线 |
-| WF-05 | 保存平行版本 | `parallel_versions` | 插入 | `uid,comparison_id,versions_json` | 供 WF-06 使用 |
-| WF-06 | 读取比较和当前主规划 | `parallel_versions`、`main_plans` | 查询 | `uid,comparison_id` | 新旧规划对比 |
-| WF-06 | 保存待确认规划 | `main_plans` | 插入 | `uid,plan_id,pending_plan_json,confirmation_token` | 跨轮确认 |
-| WF-06 | 写历史规划 | `main_plans` | 更新 | `uid,旧 plan_id` | `plan_status=history` |
-| WF-06 | 写当前主规划 | `main_plans` | 插入或更新 | `uid,plan_id,plan_json` | `plan_status=active` |
-| WF-06 | 回读主规划 | `main_plans` | 查询 | `uid,plan_id,record_version` | 验证正式写入 |
-| WF-07 | 读取主规划和任务 | `main_plans`、`semester_tasks` | 查询 | `uid,plan_id` | 当前任务列表 |
-| WF-07 | 保存待确认任务变更 | `semester_tasks` | 插入事件或临时状态 | `uid,task_id,action_log_json` | 跨轮确认 |
-| WF-07 | 创建/更新任务 | `semester_tasks` | 插入或更新 | `uid,task_id` 及任务字段 | 最新任务记录 |
-| WF-07 | 回读任务 | `semester_tasks` | 查询 | `uid,task_id` | 验证任务变更 |
-| WF-08 | 读取主规划、任务、履历和习惯 | 多表 | 查询 | `uid` | 成长证据汇总 |
-| WF-08 | 保存成长复盘 | `growth_reviews` | 插入 | `uid,review_id,review_json` | 动态修正历史 |
-| WF-08 | 保存待确认变更 | `growth_reviews` | 更新 | `uid,review_id,pending_change_json` | 转交 WF-06/07 |
-| WF-09 | 读取同类履历和任务证据 | `resume_entries`、`semester_tasks` | 查询 | `uid,entry_type/task_id` | 防重复、补事实 |
-| WF-09 | 保存待确认履历 | `resume_entries` | 插入 | `uid,entry_id,pending_entry_json,confirmation_token` | 跨轮确认 |
-| WF-09 | 写正式履历 | `resume_entries` | 更新 | `uid,entry_id,resume_entry_json` | 正式素材 |
-| WF-09 | 回读履历 | `resume_entries` | 查询 | `uid,entry_id` | 验证写入 |
-| WF-10 | 读取试错状态 | `decision_trials` | 查询 | `uid,trial_id` | 计划、日志和复盘 |
-| WF-10 | 保存待确认计划/复盘 | `decision_trials` | 插入 | `uid,trial_id,pending_json,confirmation_token` | 跨轮确认 |
-| WF-10 | 写正式计划/每日记录/复盘 | `decision_trials` | 插入或更新 | `uid,trial_id,record_type` | 完整七天记录 |
-| WF-11 | 读取近期生活记录 | `habit_logs` | 查询 | `uid,log_type` | 连续记录和周汇总 |
-| WF-11 | 保存待确认记账 | `habit_logs` | 插入临时记录 | `uid,log_id,log_json` | 金额确认 |
-| WF-11 | 写习惯/记账/健身记录 | `habit_logs` | 插入或更新 | `uid,log_id` | 生活记录 |
-| WF-12 | 读取最近复盘 | `session_recaps` | 查询 | `uid` | 避免重复、生成下次入口 |
-| WF-12 | 写会话复盘 | `session_recaps` | 插入 | `uid,session_id` 及复盘字段 | 下次会话续接 |
+## 2. 表与工作流关系
 
-## 三种数据库结果必须这样处理
-
-| `isSuccess` | `outputList` | 含义 | 应做什么 |
+| 表 | 读取者 | 写入者 | 关键范围/排序 |
 |---|---|---|---|
-| `false` | 任意 | SQL/表单操作失败 | 读取 `message`，进入失败分支，不声称已保存 |
-| `true` | `[]` | 操作成功但没有记录 | 按新用户或无历史状态继续 |
-| `true` | 有记录 | 正常读到数据 | 使用第一条或按教程汇总多条 |
+| DB-01 `user_profiles` | WF-01/WF-02/WF-03/WF-04 | WF-01 | user_key；record_version/create_time |
+| DB-02 `simulation_states` | WF-02/WF-03/WF-04 | WF-02/WF-03 | user_key + workflow_id；state_version/create_time |
+| DB-03 `route_assessments` | WF-04/WF-05 | WF-02/WF-03/WF-04 | user_key；assessment_version/create_time |
+| DB-04 `parallel_versions` | WF-05 | WF-05 | user_key + comparison_id；record_version |
+| DB-05 `main_plans` | WF-05/WF-06/WF-07 | WF-05 | user_key + plan_id + plan_status；record_version |
+| DB-06 `semester_tasks` | WF-06/WF-07 | WF-06 | user_key + task_id；record_version |
+| DB-07 `growth_reviews` | WF-07 | WF-07 | user_key + review_id；record_version |
+| DB-08 `resume_entries` | WF-08 | WF-08 | user_key + entry_id + record_status；record_version |
+| DB-09 `decision_trials` | WF-09 | WF-09 | user_key + trial_id + trial_status；record_version |
+| DB-10 `action_logs` | WF-06/WF-07 | WF-06 | user_key + task_id/log_id；create_time |
+| DB-11 `session_recaps` | WF-07 | WF-07 | user_key + recap_id；record_version |
+
+MAIN-00 不直接读写业务表。它只生成/恢复 `user_key` 并调用 MCP 工具；业务前置判断由对应工具自己读取。
+
+## 3. 各工作流数据库节点
+
+### WF-01 用户画像
+
+1. 读 DB-01 最新记录。
+2. 无记录时新增 pending。
+3. 有记录时更新 pending/修改草稿。
+4. 明确确认时按 user_key + id + pending_status 更新正式画像。
+5. 回读 confirmed 画像、版本和内容。
+
+### WF-02 虚拟大学
+
+1. 读 DB-01 confirmed 画像。
+2. 读 DB-02 最新 WF-02 状态。
+3. 首次生成事件或结算一个 pending 事件。
+4. 向 DB-02 追加新 state_version。
+5. 完成时把 simulation_result_json 写/追加到 DB-03。
+
+### WF-03 生存大冒险
+
+1. 读 DB-01 confirmed 画像。
+2. 读 DB-02 最新 WF-03 状态。
+3. 首次生成题目或结算一个 pending 问题。
+4. 向 DB-02 追加新 state_version。
+5. 完成时把 adventure_result_json 写/追加到 DB-03。
+
+### WF-04 五路径推荐
+
+1. 读 DB-01 confirmed 画像。
+2. 读 DB-02 两种已完成探索或读 DB-03 已汇总证据。
+3. 判断只有 WF-02、只有 WF-03、两者都有或两者都无。
+4. 检索 KB-01，生成推荐。
+5. 新增 DB-03 评估版本并回读。
+
+### WF-05 方向与主规划
+
+1. 读 DB-01 confirmed 画像。
+2. 读 DB-03 最新推荐。
+3. 读 DB-04 最新方向比较。
+4. 读 DB-05 当前 pending/active 规划。
+5. 比较/生成时写 DB-04 和 DB-05 pending。
+6. 明确确认时归档旧 active、激活 pending、回读新 active。
+
+### WF-06 任务与行动
+
+1. 读 DB-05 active 主规划。
+2. 查询/定位 DB-06 任务。
+3. 创建或更新任务版本。
+4. 记录行动时新增 DB-10。
+5. 完成任务必须先有 evidence，再更新 DB-06 并回读。
+
+### WF-07 复盘与收束
+
+1. 读 DB-05 active 主规划。
+2. 读 DB-06 当前/近期任务。
+3. 读 DB-10 近期行动和证据。
+4. 写 DB-07 复盘。
+5. 写 DB-11 会话收束。
+6. 分别检查写入并回读；不直接改主规划。
+
+### WF-08 履历证据
+
+1. 读 DB-08 最新 pending 和正式条目。
+2. 新真实经历写 pending。
+3. 修改/取消按 user_key + entry_id。
+4. 明确确认后写正式状态并回读。
+
+### WF-09 决策试错
+
+1. 即时分析可不写数据库。
+2. 创建/确认/日志/复盘/停止时读 DB-09 当前状态。
+3. 每次持久化新增一个 record_version。
+4. active、completed、stopped 都按 user_key + trial_id 回读。
+
+## 4. 固定的数据库判断模板
+
+读取：
+
+```text
+数据库自定义 SQL
+→ 分支器：isSuccess == true？
+   ├─ 默认/否：read_failed
+   └─ 是：代码整理 outputList
+        → 分支器：has_record == true？
+```
+
+写入：
+
+```text
+数据库新增/更新
+→ 分支器：isSuccess == true？
+   ├─ 默认/否：write_failed
+   └─ 是：自定义 SQL 回读
+        → 分支器：回读 isSuccess？
+             → 代码比较业务键/状态/版本/内容
+             → 一致才 write_succeeded
+```
+
+## 5. 必测数据库场景
+
+每张工作流教程至少包含：
+
+1. SQL 成功空数组。
+2. SQL 执行失败。
+3. 有记录且属于当前 user_key。
+4. 另一个 user_key 的记录不可见。
+5. 写入 isSuccess=false。
+6. 写入成功但回读失败。
+7. 回读成功但内容/版本不一致。
+8. 临时改错配置后恢复准确表名、字段和引用。

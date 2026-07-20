@@ -2,4 +2,6 @@
 node_modules/
 .tmp-artifact-templates/
 .tmp-db-previews/
+.tmp-artifact-templates-v2/
+.tmp-db-previews-v2/
 __pycache__/

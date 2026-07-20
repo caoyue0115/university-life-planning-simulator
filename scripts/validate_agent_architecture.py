@@ -106,7 +106,7 @@ def main() -> int:
         schema = database_schema.read_text(encoding="utf-8")
         if schema.count("`user_key`") < 11:
             errors.append("DATABASE-SCHEMA.md: user_key is not declared for all eleven tables")
-        if "`action_logs`" not in schema or "`habit_logs`" in schema:
+        if "`action_logs`" not in schema or re.search(r"^##\s+DB-10\s+`habit_logs`", schema, re.MULTILINE):
             errors.append("DATABASE-SCHEMA.md: DB-10 must be action_logs, not habit_logs")
 
     if errors:
