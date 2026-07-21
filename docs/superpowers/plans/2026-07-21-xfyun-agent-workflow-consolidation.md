@@ -391,4 +391,3 @@ Expected: remote branch updated successfully; `main` remains at `40ca333` or any
 - Spec coverage: every design section maps to Tasks 1–7, including identity, single input, MCP topology, database templates, preserved WF-01～WF-04, merged WF-05～WF-09, UI guides, diagrams, validation, commits, and push.
 - Placeholder scan: no implementation step uses TBD/TODO; security-specific runtime values are generated in MAIN rather than committed.
 - Type consistency: child input is always `AGENT_USER_INPUT:String`; parsed fields are `user_key:String` and `user_input:String`; tool output is always `result_json:String`; all database keys use `user_key:String`.
-
