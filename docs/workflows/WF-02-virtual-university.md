@@ -12,7 +12,7 @@ result_output: result_json:String
 
 WF-02 根据已确认画像生成 3～5 个虚拟大学事件。每次调用只做一件事：首次展示一个事件，或结算当前事件并展示下一事件，或完成探索并沉淀结果。用户只说自然语言，例如“我想体验一下大学生活”“我选先参加社团招新”。
 
-返回 `awaiting_user` 时，MAIN 必须结束本轮，不能替用户回答事件。完成后才允许 MAIN 在同一轮继续调用 WF-04。
+返回 `awaiting_user_input` 时，MAIN 必须结束本轮，不能替用户回答事件。完成后才允许 MAIN 在同一轮继续调用 WF-04。
 
 ## 2. 旧画布的最小修改
 
@@ -97,7 +97,8 @@ flowchart TD
     N20 -->|默认/否| N20A["N20A 消息：回读不一致"]
     N20 -->|是| N21{"N21 本轮已完成？"}
     N21 -->|默认/否| N22["N22 消息：展示待答事件"]
-    N21 -->|是| N23["N23 数据库：新增探索证据"]
+    N21 -->|是| N22B["N22B 代码：生成证据标识"]
+    N22B --> N23["N23 数据库：新增探索证据"]
     N23 --> N24{"N24 证据写入成功？"}
     N24 -->|默认/否| N24A["N24A 消息：完成但证据未同步"]
     N24 -->|是| N25["N25 消息：探索完成"]
@@ -454,12 +455,19 @@ def main(rows, expected_state_id, expected_version, expected_completed):
 
 ### 8.3 N23 写入 DB-03 探索证据
 
-先在 N13 同一路线后增加一个简单代码输出 `assessment_id="ev_" + state_id_out`，或直接把前缀和 N13/state_id_out 用文本处理拼成一个 String；N23 的“完整变量列表”只能选择这个上游结果。新增字段：
+N22B 输入 `state_id=N13/state_id_out`：
+
+```python
+def main(state_id):
+    return {"assessment_id": "ev_" + str(state_id)}
+```
+
+输出 `assessment_id:String`。N23 的“完整变量列表”中 assessment_id 只选择 N22B/assessment_id。新增字段：
 
 | 字段 | 值 |
 |---|---|
 | user_key | N00A/user_key |
-| assessment_id | 上游拼好的 `ev_<state_id>` |
+| assessment_id | N22B/assessment_id |
 | simulation_result_json | N13/result_summary |
 | adventure_result_json | `{}` |
 | route_recommendation_json | `{}` |
@@ -504,7 +512,7 @@ def main(input_valid, profile_read_success, has_profile, state_read_success, com
         else:
             status, reply, next_action, error_code = "write_failed", "探索状态已完成，但证据没有同步到推荐库。", "retry_evidence_sync", "evidence_write_failed"
     else:
-        status, reply, next_action = "awaiting_user", str(display_reply), "answer_current_event"
+        status, reply, next_action = "awaiting_user_input", str(display_reply), "answer_current_event"
     result = "{" + '"workflow_id":"WF-02",' + '"status":' + quote(status) + "," + '"reply":' + quote(reply) + "," + '"next_action":' + quote(next_action) + "," + '"error_code":' + quote(error_code) + "}"
     return {"result_json": result}
 ```
@@ -523,7 +531,7 @@ def main(input_valid, profile_read_success, has_profile, state_read_success, com
 
 | 轮次 | user_input 示例 | 必经路线 | 预期数据库/结果 |
 |---|---|---|---|
-| 1 | 我想体验虚拟大学 | N00→N01→N03→N05→N07→N10→N11→N12→N13→N15→N17→N19→N22 | DB-02 version=1、pending 非空；status=awaiting_user |
+| 1 | 我想体验虚拟大学 | N00→N01→N03→N05→N07→N10→N11→N12→N13→N15→N17→N19→N22 | DB-02 version=1、pending 非空；status=awaiting_user_input |
 | 2 | 我会先去社团摊位问清楚时间投入 | N10→N11 结算→N12→N13→N15→N17→N19→N22 | version=2；旧事件只结算一次；出现下一事件 |
 | 3～5 | 对当前事件的自然回答 | 同上 | version 递增，不覆盖历史 |
 | 完成轮 | 对最后事件的回答 | N21 是→N23→N24 是→N25 | DB-02 completed=true；DB-03 有 WF-02 证据；status=completed |
@@ -551,7 +559,7 @@ def main(input_valid, profile_read_success, has_profile, state_read_success, com
 
 发布名称：`ULPS_WF02_VIRTUAL_UNIVERSITY`。工具描述：`在 confirmed 用户画像基础上开始或续接虚拟大学单事件探索；输入内部两字段包装；返回当前事件、完成结果或可处理错误。`
 
-发布后到 MAIN 的“智能决策”节点添加“个人发布的 MCP Server”中的该工具。不要在 WF-02 内增加同类节点。平台审核未通过前，先完成画布调试；审核通过后在“发布管理→详情→Trace”核对 MAIN 传入的仍只有一个字符串参数。
+发布为 MCP Server 后可直接到 MAIN 的“智能决策”节点添加“个人发布的 MCP Server”中的该工具；该内部发布路径不等待公开上架审核。不要在 WF-02 内增加同类节点。MAIN 公开发布到星火/Desk 的审核是另一件事；子工具发布成功后即可在 Trace 核对 MAIN 传入的仍只有一个字符串参数。
 
 ## 12. 验收清单
 

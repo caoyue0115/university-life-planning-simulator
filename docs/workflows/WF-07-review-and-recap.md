@@ -35,9 +35,12 @@ flowchart TD
     N06 -->|是| N07["N07 数据库：读取近期行动"]
     N07 --> N08{"N08 行动读取成功？"}
     N08 -->|默认/否| N08A["N08A 消息：行动读取失败"]
-    N08 -->|是| N09["N09 数据库：读取最近复盘和收束版本"]
-    N09 --> N10{"N10 历史读取成功？"}
-    N10 -->|默认/否| N10A["N10A 消息：历史读取失败"]
+    N08 -->|是| N09A["N09A 数据库：读取最近复盘版本"]
+    N09A --> N09C{"N09C 复盘历史读取成功？"}
+    N09C -->|默认/否| N10A["N10A 消息：历史读取失败"]
+    N09C -->|是| N09B["N09B 数据库：读取最近收束版本"]
+    N09B --> N10{"N10 收束历史读取成功？"}
+    N10 -->|默认/否| N10A
     N10 -->|是| N11["N11 文本处理：拼接唯一模型输入"]
     N00C --> R["转 N30 公共结果"]
     N02A --> R
@@ -132,7 +135,7 @@ ORDER BY create_time DESC
 LIMIT 80;
 ```
 
-N09 需要两个数据库节点串行实现，因为每个节点只能选一张表：N09A 读 DB-07，N09B 再读 DB-11。图中 N09 代表这组节点。
+N09A 与 N09B 是两个串行数据库节点，因为每个节点只能选一张表。N09C 先检查 N09A/isSuccess；成功才执行 N09B。N10 再检查 N09B/isSuccess；任一次失败都到 N10A，成功空数组代表首次复盘，允许继续。
 
 DB-07：
 
@@ -154,7 +157,7 @@ ORDER BY record_version DESC, create_time DESC
 LIMIT 1;
 ```
 
-N10 要检查两次 isSuccess；任一次失败都到 N10A。成功空数组代表首次复盘，允许继续。
+N09C 条件固定为 N09A/isSuccess=true，N10 条件固定为 N09B/isSuccess=true；两者都必须保留默认路线。
 
 ## 4. N11～N15：生成、单输入提取和校验
 
@@ -270,9 +273,11 @@ def q(value):
     return '"' + str(value if value is not None else "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r") + '"'
 
 
-def main(input_valid, prerequisites_ok, result_valid, display_reply,
+def main(input_valid, plan_read, has_plan, tasks_read, actions_read,
+         review_history_read, recap_history_read, result_valid, display_reply,
          review_write, recap_write, review_read, recap_read, both_match):
     status, reply, next_action, error_code = "needs_input", "请先确认主规划。", "confirm_main_plan", "none"
+    prerequisites_ok = plan_read is True and has_plan is True and tasks_read is True and actions_read is True and review_history_read is True and recap_history_read is True
     if input_valid is not True:
         status, reply, next_action, error_code = "validation_failed", "内部输入格式无效。", "retry_same_message", "invalid_envelope"
     elif prerequisites_ok is not True:
@@ -287,7 +292,7 @@ def main(input_valid, prerequisites_ok, result_valid, display_reply,
     return {"result_json": result}
 ```
 
-N30 输出 `result_json:String`；N31 只返回该参数。
+N30 形参映射：input_valid=N00A/input_valid；plan_read/has_plan=N01/isSuccess、N03/has_plan；tasks_read=N05/isSuccess；actions_read=N07/isSuccess；review_history_read=N09A/isSuccess；recap_history_read=N09B/isSuccess；result_valid/display_reply=N14；review_write/recap_write=N16/N18 的 isSuccess；review_read/recap_read=N20/N22 的 isSuccess；both_match=N24/both_match。输出 `result_json:String`；N31 只返回该参数。
 
 ## 7. 调试指南
 

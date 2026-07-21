@@ -481,7 +481,7 @@ def main(input_valid, profile_read_success, has_profile, simulation_read_success
 
 发布名称：`ULPS_WF04_FIVE_PATH_RECOMMENDATION`。描述：`读取 confirmed 画像与至少一种已完成 WFB 探索证据，检索 KB-01，生成可解释的五路径推荐并保存回读。`
 
-发布为当前账号 MCP Server 后添加到 MAIN。WF-04 内不调用其他工具。审核通过后从“发布管理→详情→Trace”检查：MAIN 只传一个字符串；WF-04 自己读取证据；只做过一种探索时仍能完成但 confidence=medium。
+发布为当前账号 MCP Server 后即可添加到 MAIN；内部 MCP Server 发布不等待公开上架审核。WF-04 内不调用其他工具。子工具发布成功后从 Trace 检查：MAIN 只传一个字符串；WF-04 自己读取证据；只做过一种探索时仍能完成但 confidence=medium。MAIN 公开发布到星火/Desk 的审核另行进行。
 
 ## 11. 验收清单
 

@@ -79,6 +79,10 @@ def main() -> int:
             errors.append(f"{path.name}: extractor instructions may contain multiple inputs")
         if re.search(r"(?:复制|填写|粘贴|输入)[^\n]{0,24}(?:confirmation_)?token", text, re.IGNORECASE):
             errors.append(f"{path.name}: asks user to handle a confirmation token")
+        if re.search(r"[\"']awaiting_user[\"']", text):
+            errors.append(f"{path.name}: uses awaiting_user instead of shared awaiting_user_input")
+        if re.search(r"\bstatus[^\n]{0,80}[\"']safety_stop[\"']", text):
+            errors.append(f"{path.name}: uses safety_stop as a result status instead of unsafe_request")
         if re.search(r"```mermaid[\s\S]*?(?:Agent\s*智能决策|工作流节点|MCP\s*工具)[\s\S]*?```", text):
             errors.append(f"{path.name}: child diagram contains nested orchestration")
         for index, sql in enumerate(sql_blocks(text), start=1):

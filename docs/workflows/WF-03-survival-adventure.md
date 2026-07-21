@@ -13,7 +13,7 @@ result_output: result_json:String
 WF-03 用 4～6 个校园生存情境观察资源分配、协作、抗压、求助和风险判断。它是娱乐化探索，不是临床测评、纪律裁决或现实安全建议。用户每次只回答当前题目；工作流每轮只结算一次。
 
 - 没有 confirmed 画像：返回 `needs_input`，不生成题目。
-- 还有题目：返回 `awaiting_user`，MAIN 结束本轮。
+- 还有题目：返回 `awaiting_user_input`，MAIN 结束本轮。
 - 探索完成且 DB-03 证据写入成功：返回 `completed`，MAIN 才可继续调用 WF-04。
 - 用户表达现实危险、自伤或违法风险：不继续游戏情节，返回安全提示和线下求助建议。
 
@@ -85,7 +85,8 @@ flowchart TD
     N19 -->|默认/否| N19A["N19A 消息：回读不一致"]
     N19 -->|是| N20{"N20 已完成？"}
     N20 -->|默认/否| N21["N21 消息：展示当前题目"]
-    N20 -->|是| N22["N22 数据库：新增探索证据"]
+    N20 -->|是| N21B["N21B 代码：生成证据标识"]
+    N21B --> N22["N22 数据库：新增探索证据"]
     N22 --> N23{"N23 证据写入成功？"}
     N23 -->|默认/否| N23A["N23A 消息：证据未同步"]
     N23 -->|是| N24["N24 消息：冒险完成"]
@@ -328,12 +329,19 @@ def main(rows, expected_state_id, expected_version, expected_completed):
 
 ### 7.3 N22 写 DB-03
 
-用一个上游文本处理拼出 `assessment_id=ev_<N12/state_id_out>`，然后新增：
+N21B 输入 `state_id=N12/state_id_out`：
+
+```python
+def main(state_id):
+    return {"assessment_id": "ev_" + str(state_id)}
+```
+
+输出 `assessment_id:String`。然后 N22 新增：
 
 | 字段 | 值 |
 |---|---|
 | user_key | N00A/user_key |
-| assessment_id | 上游 assessment_id |
+| assessment_id | N21B/assessment_id |
 | simulation_result_json | `{}` |
 | adventure_result_json | N12/result_summary |
 | route_recommendation_json | `{}` |
@@ -369,7 +377,7 @@ def main(input_valid, profile_read_success, has_profile, state_read_success, com
     elif completed_before is True:
         status, reply, next_action = "completed", "大学生存大冒险已完成，不重复新增状态。", "choose_wf02_or_wf04"
     elif safety_stop is True:
-        status, reply, next_action, error_code = "safety_stop", str(display_reply), "seek_real_world_help", "safety_stop"
+        status, reply, next_action, error_code = "unsafe_request", str(display_reply), "seek_real_world_help", "safety_stop"
     elif result_valid is not True:
         status, reply, next_action, error_code = "needs_input", "当前回答无法可靠结算，请直接回答当前题目。", "answer_current_question", "unhandled_answer"
     elif state_write_success is not True or readback_success is not True or readback_matches is not True:
@@ -380,7 +388,7 @@ def main(input_valid, profile_read_success, has_profile, state_read_success, com
         else:
             status, reply, next_action, error_code = "write_failed", "冒险状态已完成，但推荐证据未同步。", "retry_evidence_sync", "evidence_write_failed"
     else:
-        status, reply, next_action = "awaiting_user", str(display_reply), "answer_current_question"
+        status, reply, next_action = "awaiting_user_input", str(display_reply), "answer_current_question"
     result = "{" + '"workflow_id":"WF-03",' + '"status":' + quote(status) + "," + '"reply":' + quote(reply) + "," + '"next_action":' + quote(next_action) + "," + '"error_code":' + quote(error_code) + "}"
     return {"result_json": result}
 ```
@@ -422,7 +430,7 @@ N30 输出 `result_json:String`。N31 回答模式选择“返回参数，由工
 
 发布名称：`ULPS_WF03_SURVIVAL_ADVENTURE`。描述：`基于 confirmed 画像开始或续接安全的大学生存大冒险单题探索，返回当前题目、完成证据或错误状态。`
 
-发布为当前账号的 MCP Server 后，只在 MAIN 的智能决策节点添加它。WF-03 内不添加工具调用节点。审核通过后用“发布管理→详情→Trace”核对每次只处理一个题目，并检查输出是紧凑 JSON 字符串。
+发布为当前账号的 MCP Server 后即可在 MAIN 的智能决策节点添加它；内部 MCP Server 发布不等待公开上架审核。WF-03 内不添加工具调用节点。子工具发布成功后用 Trace 核对每次只处理一个题目，并检查输出是紧凑 JSON 字符串；MAIN 公开发布到星火/Desk 的审核另行进行。
 
 ## 11. 验收清单
 

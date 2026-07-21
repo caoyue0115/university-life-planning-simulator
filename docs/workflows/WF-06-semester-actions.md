@@ -310,17 +310,19 @@ def q(value):
     return '"' + str(value if value is not None else "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r") + '"'
 
 
-def main(input_valid, prerequisites_ok, model_valid, action, display_reply,
+def main(input_valid, plan_read, has_plan, tasks_read, logs_read,
+         model_valid, action, display_reply,
          task_write_ok, task_read_ok, task_match, log_write_ok, log_read_ok,
          log_match, evidence_write_ok, completion_write_ok, completion_read_ok,
          completion_match):
     status, reply, next_action, error_code = "needs_input", "请说明具体任务或已发生的行动。", "clarify_task_or_action", "none"
+    prerequisites_ok = plan_read is True and has_plan is True and tasks_read is True and logs_read is True
     if input_valid is not True:
         status, reply, next_action, error_code = "validation_failed", "内部输入格式无效。", "retry_same_message", "invalid_envelope"
     elif prerequisites_ok is not True:
         status, reply, next_action = "needs_input", "请先确认一份 active 主规划。", "confirm_main_plan"
     elif action == "safety_stop":
-        status, reply, next_action, error_code = "safety_stop", str(display_reply), "seek_real_world_help", "safety_stop"
+        status, reply, next_action, error_code = "unsafe_request", str(display_reply), "seek_real_world_help", "safety_stop"
     elif model_valid is not True or action == "needs_input":
         status, reply, next_action = "needs_input", str(display_reply), "provide_task_object_or_evidence"
     elif action == "list_tasks":
@@ -344,7 +346,7 @@ def main(input_valid, prerequisites_ok, model_valid, action, display_reply,
     return {"result_json": result}
 ```
 
-`prerequisites_ok` 由 N01/isSuccess、N03/has_plan、N05/isSuccess、N07/isSuccess 合并。N40 输出 `result_json:String`，N41 只返回这一项。
+N40 形参映射：input_valid=N00A/input_valid；plan_read=N01/isSuccess；has_plan=N03/has_plan；tasks_read=N05/isSuccess；logs_read=N07/isSuccess；model_valid/action/display_reply=N12 对应输出；普通任务写入/回读/比较=N14/N16/N18；普通日志=N20/N22/N24；完成路线=N26/N28/N30/N32。N40 输出 `result_json:String`，N41 只返回这一项。
 
 ## 8. 调试指南
 

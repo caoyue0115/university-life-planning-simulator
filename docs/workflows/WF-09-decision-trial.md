@@ -285,7 +285,7 @@ def main(input_valid, read_success, history_success, model_valid, action,
     elif read_success is not True or history_success is not True:
         status, reply, next_action, error_code = "read_failed", "暂时无法读取试错状态。", "retry_later", "read_failed"
     elif safety_stop is True:
-        status, reply, next_action, error_code = "safety_stop", str(display_reply), "seek_professional_help", "safety_stop"
+        status, reply, next_action, error_code = "unsafe_request", str(display_reply), "seek_professional_help", "safety_stop"
     elif model_valid is not True or action == "needs_input":
         status, reply, next_action = "needs_input", str(display_reply), "clarify_trial_action"
     elif action in ["analyze", "show_status"]:
