@@ -1,464 +1,438 @@
 # WF-03 大学生存大冒险：逐节点搭建指南
 
-> 本文件以 WF-01 的实际页面为标准。请按本文件编号重新摆放 WF-03，不沿用旧版编号。当前结束节点按你选择的“第一种方式”返回 `workflow_finished`，完整题目和结果由消息节点展示。
+<!-- AGENT-CONTRACT
+start_inputs: AGENT_USER_INPUT:String
+extractor_input_count: 1
+result_output: result_json:String
+-->
 
-## 1. 本工作流最终完成什么
+> 这是已搭 WF-03 的最小迁移版。保留多轮题目、自然语言回答、每轮结算和最终能力画像；把入口改成单字符串，把两套问答链收敛成一条确定上游链，并用 `user_key + workflow_id='WF-03'` 与 WF-02 完全隔离。
 
-WF-03 每次只展示或结算一道场景题。未完成时把题目、答案和信号保存到 `simulation_states`；完成全部题目后，再把五路径与八项能力的汇总结果写入 `route_assessments`，供 WF-04 使用。
+## 1. 业务目标和硬边界
 
-## 2. 数据表准备
+WF-03 用 4～6 个校园生存情境观察资源分配、协作、抗压、求助和风险判断。它是娱乐化探索，不是临床测评、纪律裁决或现实安全建议。用户每次只回答当前题目；工作流每轮只结算一次。
 
-在数据库 `university` 中准备：
+- 没有 confirmed 画像：返回 `needs_input`，不生成题目。
+- 还有题目：返回 `awaiting_user`，MAIN 结束本轮。
+- 探索完成且 DB-03 证据写入成功：返回 `completed`，MAIN 才可继续调用 WF-04。
+- 用户表达现实危险、自伤或违法风险：不继续游戏情节，返回安全提示和线下求助建议。
 
-- `simulation_states`：上传 [DB-02](../database/import-templates/DB-02-simulation-states.xlsx)，用于跨轮保存题目和答案。
-- `route_assessments`：上传 [DB-03](../database/import-templates/DB-03-route-assessments.xlsx)，只在全部题目完成后新增一条评估结果。
+## 2. 已搭画布只改这些地方
 
-两表自动字段 `id/uid/create_time` 保留。WF-03 状态行固定 `workflow_id=WF-03`、`state_type=adventure`。
+| 区域 | 保留 | 必改 |
+|---|---|---|
+| 开始 | 原节点位置 | 删除所有额外参数，只留 `AGENT_USER_INPUT:String` |
+| 前置 | 画像门禁 | 工作流内部按 user_key 读取 confirmed 画像 |
+| 状态 | DB-02 多轮续接 | workflow_id 固定 WF-03，版本追加，不覆盖 WF-02 |
+| 问答 | 一轮一题 | 文本处理先拼一个 String；变量提取器只引用模型 output |
+| 分支 | 未答/已答/完成 | 改成一个模型通过 has_pending 决定动作，避免数据库跨分支引用 |
+| 结束 | 原用户消息 | 全部汇入 result builder，结束只返回 `result_json:String` |
 
-## 3. 分段流程图
-
-### 3.1 读取状态
-
-```mermaid
-flowchart LR
-    N00["N00 开始"] --> N01["N01 数据库：读取测试状态"]
-    N01 --> N02{"N02 分支器：读取成功？"}
-    N02 -->|否| N29["N29 消息：读取失败"]
-    N02 -->|是| N03["N03 代码：整理状态"]
-    N03 --> N04{"N04 分支器：有待回答题目？"}
-    N04 -->|否| N05["N05 大模型：生成下一题"]
-    N04 -->|是| N12["N12 变量提取器：提取答案"]
-    N29 --> N28["N28 公共结束"]
-```
-
-![WF-03 流程图 1](images/WF-03-survival-adventure-01.png)
-
-### 3.2 生成题目
+## 3. 完整画布
 
 ```mermaid
-flowchart LR
-    N05["N05 大模型：生成下一题"] --> N06["N06 变量提取器：提取题目"]
-    N06 --> N07["N07 代码：准备题目状态行"]
-    N07 --> N08["N08 数据库：新增题目状态"]
-    N08 --> N09{"N09 分支器：保存成功？"}
-    N09 -->|是| N10["N10 消息：展示题目"]
-    N09 -->|否| N11["N11 消息：题目未保存"]
-    N10 --> N28["N28 公共结束"]
-    N11 --> N28
+flowchart TD
+    N00["N00 开始"] --> N00A["N00A 代码：解析包装"]
+    N00A --> N00B{"N00B 输入有效？"}
+    N00B -->|默认/否| N00C["N00C 消息：输入无效"]
+    N00B -->|是| N01["N01 数据库：读取 confirmed 画像"]
+    N01 --> N02{"N02 画像读取成功？"}
+    N02 -->|默认/否| N02A["N02A 消息：画像读取失败"]
+    N02 -->|是| N03["N03 代码：整理画像"]
+    N03 --> N04{"N04 有 confirmed 画像？"}
+    N04 -->|默认/否| N04A["N04A 消息：先完成画像"]
+    N04 -->|是| N05["N05 数据库：读取 WF-03 状态"]
+    N05 --> N06{"N06 状态读取成功？"}
+    N06 -->|默认/否| N06A["N06A 消息：状态读取失败"]
+    N06 -->|是| N07["N07 代码：整理当前状态"]
+    N07 --> N08{"N08 已完成？"}
+    N08 -->|是| N08A["N08A 消息：返回已有结果"]
+    N08 -->|默认/否| N09["N09 文本处理：拼接唯一模型输入"]
+    N00C --> R["转 N30 公共结果"]
+    N02A --> R
+    N04A --> R
+    N06A --> R
+    N08A --> R
+    N09 --> R2["转单题处理段"]
 ```
 
-![WF-03 流程图 2](images/WF-03-survival-adventure-02.png)
-
-### 3.3 结算答案并完成测试
+![WF-03 入口和状态](images/WF-03-survival-adventure-01.png)
 
 ```mermaid
-flowchart LR
-    N12["N12 变量提取器：提取答案"] --> N13{"N13 分支器：答案有效？"}
-    N13 -->|否| N14["N14 消息：请重新回答"]
-    N13 -->|是| N15["N15 大模型：计算信号和后续"]
-    N15 --> N16["N16 变量提取器：提取结算结果"]
-    N16 --> N17["N17 代码：准备结算状态行"]
-    N17 --> N18["N18 数据库：新增结算状态"]
-    N18 --> N19{"N19 分支器：状态保存成功？"}
-    N19 -->|否| N20["N20 消息：状态未保存"]
-    N19 -->|是| N21{"N21 分支器：测试完成？"}
-    N21 -->|否| N22["N22 消息：展示结算和下一题"]
-    N21 -->|是| N23["N23 代码：准备最终评估行"]
-    N23 --> N24["N24 数据库：新增最终评估"]
-    N24 --> N25{"N25 分支器：评估保存成功？"}
-    N25 -->|是| N26["N26 消息：展示最终结果"]
-    N25 -->|否| N27["N27 消息：结果未保存"]
-    N14 --> N28["N28 公共结束"]
-    N20 --> N28
-    N22 --> N28
-    N26 --> N28
-    N27 --> N28
+flowchart TD
+    N09["N09 文本处理：拼接唯一模型输入"] --> N10["N10 大模型：生成或结算一个题目"]
+    N10 --> N11["N11 变量提取器：统一结果"]
+    N11 --> N12["N12 代码：安全与结构校验"]
+    N12 --> N13{"N13 可继续？"}
+    N13 -->|默认/否| N13A["N13A 消息：回答无效或安全停止"]
+    N13 -->|是| N14["N14 数据库：新增状态版本"]
+    N14 --> N15{"N15 写入成功？"}
+    N15 -->|默认/否| N15A["N15A 消息：状态未保存"]
+    N15 -->|是| N16["N16 数据库：回读刚写版本"]
+    N13A --> R["转 N30 公共结果"]
+    N15A --> R
+    N16 --> R2["转回读完成段"]
 ```
 
-![WF-03 流程图 3](images/WF-03-survival-adventure-03.png)
+![WF-03 单题生成和结算](images/WF-03-survival-adventure-02.png)
 
-所有消息节点连接 N28 结束，没有悬空出口。
+```mermaid
+flowchart TD
+    N16["N16 数据库：回读刚写版本"] --> N17{"N17 回读成功？"}
+    N17 -->|默认/否| N17A["N17A 消息：无法证明写入"]
+    N17 -->|是| N18["N18 代码：比较回读"]
+    N18 --> N19{"N19 回读一致？"}
+    N19 -->|默认/否| N19A["N19A 消息：回读不一致"]
+    N19 -->|是| N20{"N20 已完成？"}
+    N20 -->|默认/否| N21["N21 消息：展示当前题目"]
+    N20 -->|是| N22["N22 数据库：新增探索证据"]
+    N22 --> N23{"N23 证据写入成功？"}
+    N23 -->|默认/否| N23A["N23A 消息：证据未同步"]
+    N23 -->|是| N24["N24 消息：冒险完成"]
+    N17A --> N30["N30 代码：整理 result_json"]
+    N19A --> N30
+    N21 --> N30
+    N23A --> N30
+    N24 --> N30
+    N30 --> N31["N31 结束"]
+```
 
-## 4. N00 开始
+![WF-03 回读、证据和结束](images/WF-03-survival-adventure-03.png)
 
-保留 `AGENT_USER_INPUT:String`，点击“+ 添加”：
+## 4. N00～N00C：单参数入口
 
-| 变量 | 类型 | 必填 | 调试值 |
-|---|---|---:|---|
-| `uid` | String | 是 | `test_user_001` |
-| `profile_json` | String | 是 | WF-01 已确认画像 |
-| `request_time` | String | 是 | `2026-07-19 13:00:00` |
-| `configured_question_count` | Integer | 是 | `5` |
+N00 只添加：
 
-`AGENT_USER_INPUT` 首轮可填“开始大学生存大冒险”，后续填当前题答案。
+| 参数名 | 类型 | 必填 |
+|---|---|---|
+| `AGENT_USER_INPUT` | String | 是 |
 
-## 5. N01 数据库：读取测试状态
+N00A 的输入 `raw_input` 引用开始/AGENT_USER_INPUT。直接复制 [WF-02 第 5.2 节](WF-02-virtual-university.md#52-n00a-代码解析包装) 的完整 Python，不增加 import，不改字段名。输出必须逐项声明：
 
-- 模式：自定义 SQL；数据库：`university`。
-- 输入：`uid｜引用｜N00/uid`。
+| 输出 | 类型 |
+|---|---|
+| `user_key` | String |
+| `user_input` | String |
+| `input_valid` | Boolean |
+| `input_error` | String |
+
+调试值：
+
+```json
+{"user_key":"uk_0123456789abcdef0123456789abcdef","user_input":"我想开始大学生存大冒险"}
+```
+
+N00B：N00A/input_valid=true → N01；默认 → N00C。N00C 回复“内部输入包装无效，本轮没有读取或写入数据”，连接 N30。
+
+## 5. N01～N08：画像和 WF-03 状态
+
+### 5.1 N01 confirmed 画像
+
+数据库 `university`，自定义 SQL，输入 `user_key=N00A/user_key`：
 
 ```sql
-SELECT id, uid, state_id, state_json, pending_item_json,
-       current_index, completed, updated_at
-FROM simulation_states
-WHERE uid='{{uid}}' AND workflow_id='WF-03'
-ORDER BY updated_at DESC, create_time DESC
+SELECT id, user_key, profile_json, pending_status, record_version, create_time
+FROM user_profiles
+WHERE user_key='{{user_key}}' AND pending_status='confirmed'
+ORDER BY record_version DESC, create_time DESC
 LIMIT 1;
 ```
 
-固定输出：`isSuccess:Boolean`、`message:String`、`outputList:Array<Object>`。
+N02：isSuccess=true → N03；默认 → N02A。
 
-## 6. N02 分支器：读取成功？
-
-引用 `N01/isSuccess`，条件“等于”，比较类型固定值，比较值 `true`。是 → N03；默认/否 → N29。成功空数组仍走 N03。
-
-## 7. N03 代码：整理状态
-
-输入 `outputList｜引用｜N01/outputList`。
+N03 输入 `rows=N01/outputList`：
 
 ```python
-def main(outputList):
-    rows = outputList if isinstance(outputList, list) else []
-    row = rows[0] if len(rows) > 0 and isinstance(rows[0], dict) else {}
+def main(rows):
+    items = rows if isinstance(rows, list) else []
+    row = items[0] if items and isinstance(items[0], dict) else {}
+    profile_json = str(row.get("profile_json", "")).strip()
+    return {"has_profile": bool(profile_json and profile_json != "{}"), "profile_json": profile_json}
+```
+
+输出 `has_profile:Boolean`、`profile_json:String`。N04 默认路线到 N04A，提示先完成画像。
+
+### 5.2 N05 最新 WF-03 状态
+
+输入 `user_key=N00A/user_key`：
+
+```sql
+SELECT id, user_key, state_id, workflow_id, state_type, state_json,
+       pending_item_json, state_version, current_index, completed, create_time
+FROM simulation_states
+WHERE user_key='{{user_key}}' AND workflow_id='WF-03'
+ORDER BY state_version DESC, create_time DESC
+LIMIT 1;
+```
+
+N06：isSuccess=true → N07；默认 → N06A。
+
+N07 输入 `rows=N05/outputList`、`user_key=N00A/user_key`：
+
+```python
+def main(rows, user_key):
+    items = rows if isinstance(rows, list) else []
+    row = items[0] if items and isinstance(items[0], dict) else {}
+    state_id = str(row.get("state_id", "")).strip() or ("adv_" + str(user_key)[3:15])
+    state_json = str(row.get("state_json", "{}")).strip() or "{}"
+    pending = str(row.get("pending_item_json", "{}")).strip() or "{}"
     try:
+        version = int(row.get("state_version", 0))
         index_value = int(row.get("current_index", 0))
-    except:
-        index_value = 0
-    state_text = row.get("state_json", "{}")
-    pending_text = row.get("pending_item_json", "")
+    except Exception:
+        version, index_value = 0, 0
     return {
-        "has_record": len(row) > 0,
-        "state_json": state_text if isinstance(state_text, str) and state_text else "{}",
-        "pending_item_json": pending_text if isinstance(pending_text, str) else "",
-        "current_index": index_value,
-        "has_pending": isinstance(pending_text, str) and len(pending_text.strip()) > 2,
-        "already_completed": str(row.get("completed", "false")).lower() == "true",
+        "state_id": state_id, "state_json": state_json, "pending_item_json": pending,
+        "has_pending": pending not in ["", "{}", "[]", "null"],
+        "completed": str(row.get("completed", "false")).lower() == "true",
+        "next_version": version + 1, "current_index": index_value
     }
 ```
 
-输出区声明 `has_record:Boolean`、`state_json:String`、`pending_item_json:String`、`current_index:Integer`、`has_pending:Boolean`、`already_completed:Boolean`。禁止 `import`，禁止返回 `None`。
+输出 `state_id:String`、`state_json:String`、`pending_item_json:String`、`has_pending:Boolean`、`completed:Boolean`、`next_version:Integer`、`current_index:Integer`。N08 completed=true → N08A；默认 → N09。
 
-## 8. N04 分支器：有待回答题目？
+## 6. N09～N13：唯一模型输入、提取和安全门禁
 
-引用 `N03/has_pending`，等于固定值 `true`。是 → N12；否 → N05。
+### 6.1 N09 文本处理
 
-## 9. N05 大模型：生成下一题
+选择“拼接文本”，输出顺序固定为：
 
-模型 `Spark4.0 Ultra`，关闭对话历史。输入：
+```text
+confirmed_profile={{N03/profile_json}}
+settled_state={{N07/state_json}}
+pending_question={{N07/pending_item_json}}
+has_pending={{N07/has_pending}}
+current_index={{N07/current_index}}
+latest_user_input={{N00A/user_input}}
+```
 
-| 参数名 | 引用 |
+### 6.2 N10 大模型
+
+用户提示只引用 N09/output。系统提示词：
+
+```text
+你是安全的大学生存大冒险单题引擎。
+has_pending=false 时只生成一个新校园情境；has_pending=true 时只结算 pending_question 一次。
+观察维度限于 resource_allocation、collaboration、resilience、help_seeking、risk_judgement。题目提供 2～4 个参考选项，但允许自由回答。
+回答无关时 accepted=false；不得改变 settled_state。现实危险、自伤、违法或医疗紧急情况时 safety_stop=true，只给停止游戏和联系可信人员/当地紧急资源的简短建议。
+总题数 4～6。未完成时 next_question_json 必须非空；完成时必须为 {}。模拟选择不能作为真实履历证据。
+只输出 JSON：
+{"accepted":true,"safety_stop":false,"new_state_json":"完整状态 JSON 字符串","next_question_json":"待答题目 JSON 字符串或 {}","next_index":1,"completed":false,"display_reply":"反馈和当前题目","result_summary":"完成结果 JSON 或 {}","structure_complete":true}
+```
+
+### 6.3 N11 变量提取器
+
+固定 `input:String` 只引用 N10/output：
+
+| 输出 | 类型 |
 |---|---|
-| `profile_json` | N00/profile_json |
-| `state_json` | N03/state_json |
-| `current_index` | N03/current_index |
-| `configured_question_count` | N00/configured_question_count |
+| `accepted` | Boolean |
+| `safety_stop` | Boolean |
+| `new_state_json` | String |
+| `next_question_json` | String |
+| `next_index` | Integer |
+| `completed` | Boolean |
+| `display_reply` | String |
+| `result_summary` | String |
+| `structure_complete` | Boolean |
 
-系统提示词：
+### 6.4 N12 代码校验
 
-```text
-你是“大学生存大冒险”主持人。每次只生成一道真实资源冲突题，覆盖课程、项目、社团、实习、比赛、健康或预算之一。给 3 个都可辩护的选项并允许自定义，禁止设置明显正确答案，禁止制造焦虑。
-只输出 JSON：
-{"state_json":{},"question":{"id":"Q1","scene":"","options":[{"id":"A","text":"","tradeoff":""}]},"question_index":1,"reply":""}
-```
-
-用户提示词：
-
-```text
-画像：{{profile_json}}
-已有测试状态：{{state_json}}
-当前题号：{{current_index}}
-总题数：{{configured_question_count}}
-生成下一题。不得重复已有场景，只输出规定 JSON。
-```
-
-输出格式 `text`，变量 `output:String`。
-
-## 10. N06 变量提取器：提取题目
-
-输入 `input｜引用｜N05/output`。输出：
-
-| 变量名 | 类型 | 描述 |
-|---|---|---|
-| `state_json` | String | 完整累计状态 JSON 字符串 |
-| `question_json` | String | 完整 question 对象 JSON 字符串 |
-| `question_index` | Integer | 当前题号 |
-| `reply` | String | 给用户的题目和作答提示 |
-
-## 11. N07～N11：保存并展示题目
-
-N07 输入 `uid/request_time` 引用 N00，其他四项引用 N06。代码：
+输入 N11 全部输出及 N07 的 state_id、state_json、pending_item_json、next_version、current_index：
 
 ```python
-def main(uid, request_time, state_json, question_json, question_index, reply):
+def main(accepted, safety_stop, new_state_json, next_question_json, next_index,
+         completed, display_reply, result_summary, structure_complete, state_id,
+         old_state_json, old_pending_json, next_version, old_index):
+    state = str(new_state_json).strip()
+    pending = str(next_question_json).strip() or "{}"
+    reply = str(display_reply).strip()
+    is_complete = completed is True
+    safe = safety_stop is not True
+    valid = accepted is True and safe and structure_complete is True and state not in ["", "null"] and bool(reply)
+    if is_complete and pending not in ["{}", "[]", "null"]:
+        valid = False
+    if not is_complete and pending in ["{}", "[]", "null"]:
+        valid = False
     try:
-        index_value = int(question_index)
-    except:
-        index_value = 1
+        index_value = int(next_index)
+        version_value = int(next_version)
+    except Exception:
+        valid, index_value, version_value = False, int(old_index), 0
     return {
-        "state_id": str(uid) + "-WF03-" + str(request_time) + "-" + str(index_value),
-        "workflow_id": "WF-03",
-        "state_type": "adventure",
-        "state_json": str(state_json) if state_json else "{}",
-        "pending_item_json": str(question_json) if question_json else "{}",
-        "current_index": index_value,
-        "completed": "false",
-        "updated_at": str(request_time),
-        "reply": str(reply),
+        "result_valid": valid, "safety_stop": safety_stop is True,
+        "state_id_out": str(state_id), "state_json_out": state if valid else str(old_state_json),
+        "pending_out": "{}" if valid and is_complete else (pending if valid else str(old_pending_json)),
+        "state_version_out": version_value, "current_index_out": index_value if valid else int(old_index),
+        "completed_out": "true" if valid and is_complete else "false",
+        "display_reply": reply, "result_summary": str(result_summary).strip() or "{}"
     }
 ```
 
-输出区逐行声明上述 9 个同名键，`current_index` 为 Integer，其余为 String。
+逐项声明 `result_valid:Boolean`、`safety_stop:Boolean`、`state_id_out:String`、`state_json_out:String`、`pending_out:String`、`state_version_out:Integer`、`current_index_out:Integer`、`completed_out:String`、`display_reply:String`、`result_summary:String`。
 
-N08：表单处理数据 → `university / simulation_states` → 新增数据。逐字段引用 N07 的 `state_id/workflow_id/state_type/state_json/pending_item_json/current_index/completed/updated_at`；若页面强制出现 `uid`，引用 N00/uid。
+N13 先配安全停止条件：safety_stop=true → N13A；再配 result_valid=true → N14；默认也到 N13A。N13A 根据 safety_stop 显示安全提示或“请直接回答当前题目”，不写数据库。
 
-N09：引用 N08/isSuccess，等于固定值 `true`。是 → N10；否 → N11。
+## 7. N14～N24：写入、回读和证据同步
 
-- N10 输入 `reply=N07/reply`，回答内容 `{{reply}}`。
-- N11 输入 `message=N08/message`，回答内容 `题目已经生成，但没有成功保存。本轮请不要作答，稍后重试。错误：{{message}}`。
+### 7.1 N14 新增 DB-02 状态版本
 
-两者关闭流式输出，连接 N28。
+数据库字段全部引用确定上游 N12：
 
-## 12. N12～N14：提取并校验答案
+| 字段 | 值 |
+|---|---|
+| user_key | N00A/user_key |
+| state_id | N12/state_id_out |
+| workflow_id | WF-03 |
+| state_type | adventure |
+| state_json | N12/state_json_out |
+| pending_item_json | N12/pending_out |
+| state_version | N12/state_version_out |
+| current_index | N12/current_index_out |
+| completed | N12/completed_out |
 
-N12 变量提取器输入 `user_input=N00/AGENT_USER_INPUT`、`question_json=N03/pending_item_json`，输出：
+N15：isSuccess=true → N16；默认 → N15A。
 
-| 变量名 | 类型 | 描述 |
-|---|---|---|
-| `answer_text` | String | 用户对当前题的明确答案 |
-| `answer_valid` | Boolean | 编号匹配或自定义方案语义明确时为 true |
-| `reason` | String | 无效原因，有效时为空 |
+### 7.2 N16 回读
 
-N13 引用 `N12/answer_valid` 等于固定值 `true`：是 → N15，否 → N14。
+输入 `user_key=N00A/user_key`、`state_id=N12/state_id_out`、`state_version=N12/state_version_out`：
 
-N14 输入 `reason=N12/reason`、`question=N03/pending_item_json`，回答内容：
-
-```text
-这个回答还不能对应当前题目。{{reason}}
-请回复选项编号，或完整写出你的自定义方案：
-{{question}}
+```sql
+SELECT id, user_key, state_id, state_json, pending_item_json,
+       state_version, current_index, completed, create_time
+FROM simulation_states
+WHERE user_key='{{user_key}}' AND workflow_id='WF-03'
+  AND state_id='{{state_id}}' AND state_version={{state_version}}
+ORDER BY create_time DESC
+LIMIT 1;
 ```
 
-连接 N28。
+N17：isSuccess=true → N18；默认 → N17A。
 
-## 13. N15 大模型：计算单题信号并生成后续
-
-模型 `Spark4.0 Ultra`，关闭对话历史。输入：`profile_json=N00/profile_json`、`state_json=N03/state_json`、`question_json=N03/pending_item_json`、`answer_text=N12/answer_text`、`current_index=N03/current_index`、`configured_question_count=N00/configured_question_count`。
-
-系统提示词：
-
-```text
-你是大学场景测评解释器。只依据当前题和用户答案记录证据，不把单题答案直接定性为人格。内部为五路径（保研、考研、就业、考公、留学）和八项能力（执行、研究、创造、表达、协作、稳定、适应、风险承受）记录 -1/0/1 方向与文字 evidence。
-把本题答案追加到 state_json，禁止覆盖旧答案。若题数未满，同时生成下一题；若题数已满，生成完整 adventure_result，五路径和八项能力必须全部出现，面向用户只用高/中/待验证，不输出成功概率。
-只输出 JSON：
-{"state_json":{},"pending_item":{},"current_index":1,"completed":false,"reply":"","adventure_result":{}}
-```
-
-用户提示词只放变量：
-
-```text
-画像：{{profile_json}}
-结算前状态：{{state_json}}
-当前题：{{question_json}}
-用户答案：{{answer_text}}
-当前题号：{{current_index}}
-总题数：{{configured_question_count}}
-```
-
-输出 `output:String`。
-
-## 14. N16 变量提取器：提取结算结果
-
-输入 `input=N15/output`，输出：
-
-| 变量名 | 类型 | 描述 |
-|---|---|---|
-| `state_json` | String | 包含全部历史答案和信号的状态 JSON |
-| `pending_item_json` | String | 下一题 JSON；完成时 `{}` |
-| `current_index` | Integer | 已处理题数/下一题序号 |
-| `completed` | Boolean | 是否达到配置题数 |
-| `reply` | String | 本轮结算及下一题提示 |
-| `adventure_result_json` | String | 完成时的五路径与八项能力结果；未完成 `{}` |
-
-## 15. N17～N22：保存测试状态
-
-N17 输入 `uid/request_time` 与 N16 六项输出：
+N18 输入 `rows=N16/outputList`、N12/state_id_out、state_version_out、completed_out：
 
 ```python
-def main(uid, request_time, state_json, pending_item_json, current_index, completed, reply, adventure_result_json):
+def main(rows, expected_state_id, expected_version, expected_completed):
+    items = rows if isinstance(rows, list) else []
+    row = items[0] if items and isinstance(items[0], dict) else {}
     try:
-        index_value = int(current_index)
-    except:
-        index_value = 0
-    done = completed is True
-    return {
-        "state_id": str(uid) + "-WF03-" + str(request_time) + "-" + str(index_value),
-        "workflow_id": "WF-03",
-        "state_type": "adventure",
-        "state_json": str(state_json) if state_json else "{}",
-        "pending_item_json": "{}" if done else (str(pending_item_json) if pending_item_json else "{}"),
-        "current_index": index_value,
-        "completed_text": "true" if done else "false",
-        "completed_bool": done,
-        "updated_at": str(request_time),
-        "display_reply": str(reply),
-        "adventure_result_json": str(adventure_result_json) if adventure_result_json else "{}",
-    }
+        version_ok = int(row.get("state_version", -1)) == int(expected_version)
+    except Exception:
+        version_ok = False
+    completed_value = str(row.get("completed", "false")).lower()
+    matches = bool(row) and str(row.get("state_id", "")) == str(expected_state_id) and version_ok and completed_value == str(expected_completed).lower()
+    return {"readback_matches": matches, "completed_readback": completed_value == "true"}
 ```
 
-输出区声明全部 11 个返回键：`state_id:String`、`workflow_id:String`、`state_type:String`、`state_json:String`、`pending_item_json:String`、`current_index:Integer`、`completed_text:String`、`completed_bool:Boolean`、`updated_at:String`、`display_reply:String`、`adventure_result_json:String`。
+输出 `readback_matches:Boolean`、`completed_readback:Boolean`。N19 默认到 N19A，一致到 N20。N20 完成=false → N21，完成=true → N22。
 
-N18：`simulation_states` 表单新增，字段与 N08 相同，但 `completed` 引用 `N17/completed_text`，其余引用 N17。
+### 7.3 N22 写 DB-03
 
-N19：`N18/isSuccess == true`。否 → N20；是 → N21。
+用一个上游文本处理拼出 `assessment_id=ev_<N12/state_id_out>`，然后新增：
 
-- N20 输入 N18/message，回答 `本题已经结算，但进度没有保存，因此不会继续推进。错误：{{message}}`，接 N28。
-- N21 引用 `N17/completed_bool == true`。否 → N22；是 → N23。
-- N22 输入 `reply=N17/display_reply`，回答 `{{reply}}`，接 N28。
+| 字段 | 值 |
+|---|---|
+| user_key | N00A/user_key |
+| assessment_id | 上游 assessment_id |
+| simulation_result_json | `{}` |
+| adventure_result_json | N12/result_summary |
+| route_recommendation_json | `{}` |
+| evidence_sources | WF-03 |
+| evidence_gaps_json | `["WF-02"]` |
+| confidence_level | medium |
+| trigger_reason | survival_adventure_completed |
+| knowledge_version | 空 String |
+| assessment_version | N12/state_version_out |
 
-## 16. N23～N27：保存最终评估
+N23：isSuccess=true → N24；默认 → N23A。N21 引用 N12/display_reply 展示当前题目；N24 展示完成摘要并建议进入路径推荐或补做 WF-02。
 
-N23 输入 `uid=N00/uid`、`request_time=N00/request_time`、`adventure_result_json=N17/adventure_result_json`：
+## 8. N30 公共结果和 N31 结束
+
+N30 输入：N00A/input_valid、N01/isSuccess、N03/has_profile、N05/isSuccess、N07/completed、N12/result_valid、N12/safety_stop、N12/display_reply、N14/isSuccess、N16/isSuccess、N18/readback_matches、N18/completed_readback、N22/isSuccess。
 
 ```python
-def main(uid, request_time, adventure_result_json):
-    return {
-        "assessment_id": str(uid) + "-ASSESS-" + str(request_time),
-        "adventure_result_json": str(adventure_result_json) if adventure_result_json else "{}",
-        "route_recommendation_json": "{}",
-        "trigger_reason": "WF-03 场景测试完成",
-        "assessment_version": 1,
-        "updated_at": str(request_time),
-    }
+def quote(value):
+    text = str(value) if value is not None else ""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r") + '"'
+
+
+def main(input_valid, profile_read_success, has_profile, state_read_success, completed_before,
+         result_valid, safety_stop, display_reply, state_write_success, readback_success,
+         readback_matches, completed_after, evidence_write_success):
+    status, reply, next_action, error_code = "needs_input", "请先完成用户画像。", "complete_profile", "none"
+    if input_valid is not True:
+        status, reply, next_action, error_code = "validation_failed", "内部输入格式无效，本轮未处理。", "retry_same_message", "invalid_envelope"
+    elif profile_read_success is not True or state_read_success is not True:
+        status, reply, next_action, error_code = "read_failed", "暂时无法读取画像或冒险状态。", "retry_later", "read_failed"
+    elif has_profile is not True:
+        status, reply, next_action = "needs_input", "请先完成并确认用户画像。", "complete_profile"
+    elif completed_before is True:
+        status, reply, next_action = "completed", "大学生存大冒险已完成，不重复新增状态。", "choose_wf02_or_wf04"
+    elif safety_stop is True:
+        status, reply, next_action, error_code = "safety_stop", str(display_reply), "seek_real_world_help", "safety_stop"
+    elif result_valid is not True:
+        status, reply, next_action, error_code = "needs_input", "当前回答无法可靠结算，请直接回答当前题目。", "answer_current_question", "unhandled_answer"
+    elif state_write_success is not True or readback_success is not True or readback_matches is not True:
+        status, reply, next_action, error_code = "write_failed", "本轮结果没有通过写入回读校验，请稍后重试。", "retry_later", "state_readback_failed"
+    elif completed_after is True:
+        if evidence_write_success is True:
+            status, reply, next_action = "completed", str(display_reply), "choose_wf02_or_wf04"
+        else:
+            status, reply, next_action, error_code = "write_failed", "冒险状态已完成，但推荐证据未同步。", "retry_evidence_sync", "evidence_write_failed"
+    else:
+        status, reply, next_action = "awaiting_user", str(display_reply), "answer_current_question"
+    result = "{" + '"workflow_id":"WF-03",' + '"status":' + quote(status) + "," + '"reply":' + quote(reply) + "," + '"next_action":' + quote(next_action) + "," + '"error_code":' + quote(error_code) + "}"
+    return {"result_json": result}
 ```
 
-输出：`assessment_id:String`、`adventure_result_json:String`、`route_recommendation_json:String`、`trigger_reason:String`、`assessment_version:Integer`、`updated_at:String`。
+N30 输出 `result_json:String`。N31 回答模式选择“返回参数，由工作流生成”，只引用 N30/result_json。
 
-N24：表单处理数据 → `university / route_assessments` → 新增数据。设置 `assessment_id/adventure_result_json/route_recommendation_json/trigger_reason/assessment_version/updated_at`；页面要求 uid 时引用 N00/uid。`knowledge_updated_at` 非必填，本节点不要添加。
+## 9. 调试指南
 
-N25：`N24/isSuccess == true`。是 → N26；否 → N27。
+### 9.1 正常路线
 
-- N26 输入 `result=N23/adventure_result_json`，回答 `场景测试已完成并保存。以下结果是用于后续路径推荐的行为信号，不是能力定论：\n{{result}}`。
-- N27 输入 `result=N23/adventure_result_json`、`message=N24/message`，回答 `测试已完成，但最终评估没有保存。下面是本轮草稿，请先自行保留；不要把它当作已保存记录。\n{{result}}\n错误：{{message}}`。
+前置：同一 user_key 在 DB-01 有 confirmed 画像，DB-02 没有 WF-03 行。
 
-两者连接 N28。
+| 轮次 | user_input 示例 | 关键预期 |
+|---|---|---|
+| 1 | 开始大学生存大冒险 | N09 拼接 has_pending=false；DB-02 新增 version=1；返回一个题目 |
+| 2 | 我先联系舍友分工，同时向辅导员确认规则 | 同一 pending 只结算一次；version=2；返回下一题 |
+| 3～6 | 回答当前题目 | 每轮版本 +1，旧状态保留 |
+| 完成 | 回答最后一题 | completed=true；DB-03 新增 adventure_result_json；status=completed |
 
-## 17. N29 读取失败消息
+在 N11 配置页确认只有 `input` 一项，值只引用 N10/output。N14 数据库的动态状态字段只从 N12 下拉选择；如果下拉没有 N12，先检查 N12→N13→N14 连线。
 
-输入 `message=N01/message`，回答：`无法读取测试进度，本轮没有生成、结算或保存任何题目。请稍后重试。错误：{{message}}`，连接 N28。
+### 9.2 必测另一条路
 
-## 18. N28 结束
+1. 单参数不是两字段包装：N00C，数据库不执行。
+2. DB-01 成功空数组：N04A；与 N02A 读取失败严格区分。
+3. 另一个 user_key 有画像：当前 key 不可见。
+4. DB-02 仅有 WF-02 行：WF-03 必须按空状态开始，不能续接 WF-02。
+5. DB-02 读取失败：N06A，模型不执行。
+6. 已有 pending 时说“随便”：accepted=false，N13A，版本不增加。
+7. 模型漏 next_question：N12/result_valid=false，N14 不执行。
+8. 现实危险表达：safety_stop=true，N13A；不写游戏状态。
+9. N14 新增失败：N15A；不宣称保存。
+10. N16 回读失败：N17A。
+11. 回读版本不一致：N19A。
+12. DB-03 写失败：N23A，MAIN 不继续 WF-04。
+13. 已完成后再次调用：N08A，DB-02 行数不增加。
 
-- 回答模式：返回设定格式配置的回答。
-- 输出：`output｜输入｜workflow_finished`。
-- 思考内容：留空。
-- 回答内容：`本轮处理已结束，请以上方消息节点的提示为准。`
-- 流式输出：关闭。
+## 10. 发布配置
 
-## 19. 调试指南：先准备 WF-01，再完成多轮题目
+发布名称：`ULPS_WF03_SURVIVAL_ADVENTURE`。描述：`基于 confirmed 画像开始或续接安全的大学生存大冒险单题探索，返回当前题目、完成证据或错误状态。`
 
-### 19.1 上游数据和两张表的准备
+发布为当前账号的 MCP Server 后，只在 MAIN 的智能决策节点添加它。WF-03 内不添加工具调用节点。审核通过后用“发布管理→详情→Trace”核对每次只处理一个题目，并检查输出是紧凑 JSON 字符串。
 
-1. 先用测试 uid `debug_wf03_001` 在 WF-01 完成画像确认。
-2. 在 `user_profiles` 找到该 uid 最新 `pending_status=confirmed` 的行，复制完整 `profile_json`。
-3. 确认 `simulation_states` 和 `route_assessments` 两张表已经按 DB-02、DB-03 模板创建。
-4. 在 `simulation_states` 筛选该 uid，确认没有 `workflow_id=WF-03` 的旧状态；有旧记录时优先换新 uid。
-5. 在 `route_assessments` 筛选该 uid，记录测试前行数，方便确认最终评估只在完成后新增。
+## 11. 验收清单
 
-这里必须理解两张表的职责：每道题的过程状态写 DB-02；全部题目完成后才由 N24 向 DB-03 新增最终评估。看到 DB-02 写入不代表整套测试已经完成。
-
-### 19.2 固定调试输入规则
-
-所有轮次使用相同 `uid` 和 `profile_json`，每轮把 `request_time` 改成更晚时间。首次快速验证建议：
-
-```text
-configured_question_count = 3
-```
-
-三题流程跑通后，再改为产品计划使用的正式题数重新验收。题数在同一轮测试中不要中途修改，否则完成判断会不一致。
-
-### 测试 1：首轮生成 Q1
-
-```text
-AGENT_USER_INPUT = 开始大学生存大冒险
-uid = debug_wf03_001
-profile_json = 从 WF-01 confirmed 行复制
-request_time = 2026-07-19 13:00:00
-configured_question_count = 3
-```
-
-预期路径：N01 SQL 成功空数组 → N02（是）→ N03 输出 `has_pending=false` → N04（否）→ N05～N08 → N09（是）→ N10 → N28。
-
-数据库核验：DB-02 新增 `workflow_id=WF-03`、`state_type=adventure` 的行；`pending_item_json` 是 Q1，`completed=false`。DB-03 此时不能新增评估。
-
-### 测试 2：无效答案
-
-第二轮保持 uid、profile_json 和题数不变：
-
-```text
-AGENT_USER_INPUT = 都行
-request_time = 2026-07-19 13:05:00
-```
-
-预期 N04（是）→ N12 → N13（否）→ N14 → N28。DB-02 行数、最新 `current_index` 和 Q1 均不变化；N15 不执行。
-
-### 测试 3：有效回答 Q1
-
-复制 N10 实际展示的一个选项，例如：
-
-```text
-AGENT_USER_INPUT = A
-request_time = 2026-07-19 13:10:00
-```
-
-预期路径：N04（是）→ N12 → N13（是）→ N15～N18 → N19（是）→ N21（否）→ N22 → N28。DB-02 再新增一行，最新 `current_index` 增加，已回答题目和信号保留，同时存在下一题 pending。
-
-### 测试 4：中断后继续同一测试
-
-退出调试页面再重新打开，仍用同一 uid。N01 必须读到 DB-02 最新行，N03 恢复 pending 题目。输入最新题的真实选项后继续；若重新生成 Q1，应检查 uid、N01 的 `workflow_id='WF-03'` 和排序字段。
-
-### 测试 5：完成前门禁
-
-当 `current_index` 尚未达到 `configured_question_count` 时，每一轮都应走 N21（否）→ N22。观察调试轨迹，N23 和 N24 不得执行，DB-03 行数不得变化。
-
-### 测试 6：最后一题与最终评估
-
-回答第 3 题的有效选项。预期：
-
-```text
-N15 → N16 → N17 → N18 → N19（是）→ N21（是）
-→ N23 → N24 → N25（是）→ N26 → N28
-```
-
-DB-02 最新行应为 `completed=true`、`pending_item_json={}`。DB-03 应新增一行，复制并保存其 `assessment_id`，后续 WF-04 就使用这个值。`adventure_result_json` 应包含五路径信号和八项能力证据；`route_recommendation_json` 此时仍为初始化值，完整推荐由 WF-04 写入。
-
-### 测试 7：DB-02 读取失败
-
-临时把 N01 SQL 表名从 `simulation_states` 改为 `simulation_states_wrong`。预期 N02（否）→ N29 → N28，所有模型和写入节点都不执行。恢复正确表名后再次运行，确认能读取原进度。
-
-### 测试 8：题目状态写入失败
-
-使用新 uid 的首轮，临时清空 N08 的 `state_id` 引用。预期 N09（否）→ N11 → N28，消息说明题目未保存。恢复 `state_id=N07/state_id`。
-
-### 测试 9：结算状态写入失败
-
-对已有 pending 的 uid，临时清空 N18 的 `state_id`。输入有效答案后应 N19（否）→ N20，不能推进到 N21。恢复 `state_id=N17/state_id`。
-
-### 测试 10：最终 DB-03 写入失败
-
-在即将完成的测试上，临时清空 N24 的 `assessment_id` 值。预期 N25（否）→ N27 → N28。N27 可以展示本轮草稿，但必须明确没有保存；DB-03 不得出现有效新行。测试后恢复 `assessment_id=N23/assessment_id`，建议换新 uid 从头完成一次成功验收。
-
-### 19.3 最终留证
-
-- 保存 Q1 消息、无效答案消息、一次中间结算和最终 N26 的截图。
-- 保存 DB-02 全部过程行和 DB-03 最终行截图。
-- 记录最终 `uid + assessment_id`，供 WF-04 调试使用。
-- 恢复 N01、N08、N18、N24 的所有临时错误配置。
-
-## 20. 验收清单
-
-- [ ] 每轮只处理一道已展示题目，答案无效不推进。
-- [ ] DB-02 只保存过程状态；DB-03 只在全部完成后新增最终评估。
-- [ ] N01 后先检查 isSuccess，再由代码整理 outputList。
-- [ ] 五路径与八项能力都保留 evidence，不把单题贴成永久标签。
-- [ ] 三个代码节点均无 import，输入形参与输出声明完全一致。
-- [ ] 所有消息连接 N28，没有悬空分支。
+- [ ] N00 只有 `AGENT_USER_INPUT:String`。
+- [ ] N11 变量提取器只有一个 input，并只引用 N10/output。
+- [ ] 数据库变量都来自当前节点之前的确定上游。
+- [ ] WF-02/WF-03 用 workflow_id 隔离。
+- [ ] 无关回答和安全停止都不新增状态。
+- [ ] 状态新增后回读版本、state_id、completed。
+- [ ] 只有 DB-03 证据同步成功才返回 completed。
+- [ ] 每个分支有默认出口，每个消息节点连接 N30。
+- [ ] N31 只返回 `result_json:String`。
+- [ ] 正常、空数组、失败、隔离、安全、完成重入均已调试。
