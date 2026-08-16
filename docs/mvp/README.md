@@ -8,6 +8,7 @@
 |---|---|
 | [MVP 设计](MVP-DESIGN.md) | 范围、统一状态、路由规则、风险和成功标准 |
 | [统一状态协议](SHARED-STATE.md) | 初始 `state_json`、模块状态和确认规则 |
+| [数据库状态改造方案](STATE-DATABASE-REFACTOR.md) | 用数据库替代完整 `state_json` 搬运的目标架构、节点配置和迁移验收 |
 | [12 模块输入输出总表](MODULE-IO-MATRIX.md) | 每个 WF 的输入、状态字段和确认后去向 |
 | [MAIN 搭建教程](MAIN-BUILD-GUIDE.md) | 按平台页面逐节点配置总画布 |
 | [调试教程](TEST-GUIDE.md) | 先做连续性门禁，再跑 12 模块 |
