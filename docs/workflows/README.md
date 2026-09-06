@@ -34,6 +34,7 @@ WF-01～WF-12 的节点页面按[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md
 | [WF-04 路径推荐](WF-04-path-recommendation.md) | 生成五路径分级建议 |
 | [WF-05 平行人生](WF-05-parallel-lives.md) | 创建并比较 2～3 个版本 |
 | [WF-06 主规划](WF-06-main-plan.md) | 确认并保存主规划 |
+| [WF-07 数据库架构规划](WF-07-database-architecture-plan.md) | 当前新分支中 WF-07 的已确认业务、字段与逐节点配置 |
 | [WF-07 学期任务](WF-07-semester-tasks.md) | 管理学期、月度和每周任务 |
 | [WF-08 成长复盘](WF-08-growth-review.md) | 根据行为证据动态修正规划 |
 | [WF-09 履历条目](WF-09-resume-entry.md) | 把经历转成可用简历素材 |
