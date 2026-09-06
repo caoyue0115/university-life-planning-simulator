@@ -38,6 +38,7 @@ WF-01～WF-12 的节点页面按[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md
 | [WF-07 学期任务](WF-07-semester-tasks.md) | 管理学期、月度和每周任务 |
 | [WF-08 数据库架构规划](WF-08-database-architecture-plan.md) | 当前新分支中 WF-08 的已确认业务、字段与逐节点配置 |
 | [WF-08 成长复盘](WF-08-growth-review.md) | 根据行为证据动态修正规划 |
+| [WF-09 数据库架构规划](WF-09-database-architecture-plan.md) | 当前新分支中 WF-09 的业务、字段与逐节点配置 |
 | [WF-09 履历条目](WF-09-resume-entry.md) | 把经历转成可用简历素材 |
 | [WF-10 决策与试错](WF-10-decision-and-trial.md) | 决策分析及七天试错 |
 | [WF-11 微习惯](WF-11-micro-habits.md) | 记录习惯、记账和基础健身 |
