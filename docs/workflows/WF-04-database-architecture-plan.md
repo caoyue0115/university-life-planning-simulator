@@ -670,6 +670,77 @@ WF04_DB06_读取当前推荐状态
 - GitHub 归档：已记录。
 - 星辰平台实际搭建：当前不作要求。
 
+### 第 9 个节点：`WF04_C01_解析模型输出`
+
+#### 连线
+
+```text
+WF04_LLM_五路径推荐
+→ WF04_C01_解析模型输出
+→ WF04_解析是否成功
+```
+
+#### 输入
+
+| 参数名 | 引用来源 | 类型 |
+|---|---|---|
+| `model_output` | `WF04_LLM_五路径推荐.output` | String |
+| `user_input` | `开始.AGENT_USER_INPUT` | String |
+
+#### 输出
+
+| 输出变量 | 类型 |
+|---|---|
+| `parse_ok` | Boolean |
+| `error_message` | String |
+| `reply` | String |
+| `current_workflow` | String |
+| `current_status` | String |
+| `last_user_intent` | String |
+| `recommendation_status` | String |
+| `recommendation_draft_json` | String |
+| `recommendation_confirmed_json` | String |
+| `next_workflow` | String |
+| `completed_workflow_add` | String |
+| `warnings_json` | String |
+
+#### 完整代码
+
+完整可复制代码保存在：[WF-04 C01 解析代码](code/WF-04-C01-parse-model-output.py)。
+
+代码负责：兼容模型偶发 JSON 围栏；严格校验十个顶层字段、五路径完整性、匹配等级、主备选路径、状态组合、用户原话和两条必要警告；将 draft、confirmed、warnings 序列化为紧凑 String；解析失败时返回 `parse_ok=false` 和非空安全 reply。
+
+失败时安全回复为：
+
+```text
+抱歉，刚才的五路径推荐结果格式异常，请再发送一次，我会继续为你处理。
+```
+
+#### 单节点测试
+
+| 测试 | 结果 |
+|---|---|
+| 合法待确认推荐 | 通过 |
+| 合法确认完成结果 | 通过 |
+| 缺少一条路径的非法结果 | 正确拦截 |
+
+#### 当前状态
+
+- 代码、输入、输出和接口：已讨论确认。
+- 单节点测试：成功与失败样例均符合预期。
+- GitHub 归档：已记录。
+- 星辰平台实际搭建：当前不作要求。
+
+#### 完成检查
+
+- [ ] 两个输入参数名称正确。
+- [ ] `model_output` 引用 WF-04 大模型的 String 输出。
+- [ ] 十二个输出名称和类型全部正确。
+- [ ] `parse_ok` 为 Boolean，不是 String。
+- [ ] 失败时 reply 非空。
+- [ ] 失败路径不写数据库。
+- [ ] 后续预留连接 `WF04_解析是否成功`。
+
 ## 八、下一步
 
-下一次只讨论第 9 个节点：`WF04_C01_解析模型输出`。代码、输入、输出和测试结果在确认前不归档推送。
+下一次只讨论第 10 个节点：`WF04_解析是否成功`。该节点确认前不提前归档具体配置。
