@@ -517,6 +517,20 @@ C01 校验十个顶层字段、用户原话、状态组合、完成条件及 war
 
 完整代码：[WF-03 C02 合并路由代码](code/WF-03-C02-merge-route-state.py)。它保留并去重旧完成列表，只允许按需加入 WF-03，并把路由版本加一。失败占位值不得写入数据库。
 
+### 已确认决策：跳过 C02 保护分支
+
+按用户决定，不增加 `WF03_路由合并是否成功`。C02 已改为异常时直接抛错并中断，避免失败占位值流入 DB06。
+
+### 第 11 个节点：`WF03_DB06_更新路由状态`
+
+连接：`WF03_C02_合并路由状态 → WF03_DB06_更新路由状态`。数据库为 `university_planner / agent_runtime_states`，表单处理数据，处理模式为更新数据。
+
+数据范围：`schema_version` 等于输入值 `mvp-1.1`。
+
+更新：`current_workflow←C01.current_workflow`、`current_status←C01.current_status`、`next_workflow←C01.next_workflow`、`completed_workflows←C02.completed_workflows_json`、`state_version←C02.state_version_next`。
+
+不更新 schema_version、profile_status、系统字段或 reply。后续连接 `WF03_写入 last_reply`。
+
 ## 四、下一步
 
-下一次只讨论第 11 个节点：`WF03_路由合并是否成功`。
+下一次只讨论第 12 个节点：`WF03_写入 last_reply`。

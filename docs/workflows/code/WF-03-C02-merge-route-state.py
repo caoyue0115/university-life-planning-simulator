@@ -31,4 +31,4 @@ def main(route_state_rows, completed_workflow_add):
         except Exception: version = 1
         return {"merge_ok": True, "error_message": "", "completed_workflows_json": json.dumps(clean, ensure_ascii=False, separators=(",", ":")), "state_version_next": version + 1}
     except Exception as error:
-        return {"merge_ok": False, "error_message": str(error), "completed_workflows_json": "[]", "state_version_next": 1}
+        raise RuntimeError("路由状态合并失败：" + str(error))
