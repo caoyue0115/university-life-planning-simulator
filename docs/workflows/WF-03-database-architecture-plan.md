@@ -474,6 +474,16 @@ WF03_DB04_读取当前冒险状态
 - GitHub 归档：已记录。
 - 星辰平台实际搭建：当前不作要求。
 
+### 第 7 个节点：`WF03_C01_解析模型输出`
+
+输入为 `model_output=WF03_LLM.output` 和 `user_input=开始.AGENT_USER_INPUT`。完整可复制代码保存在：[WF-03 C01 解析代码](code/WF-03-C01-parse-model-output.py)。
+
+输出共 12 项：`parse_ok:Boolean`、`error_message:String`、`reply:String`、`current_workflow:String`、`current_status:String`、`last_user_intent:String`、`adventure_status:String`、`adventure_draft_json:String`、`adventure_confirmed_json:String`、`next_workflow:String`、`completed_workflow_add:String`、`warnings_json:String`。
+
+C01 校验十个顶层字段、用户原话、状态组合、完成条件及 warnings；成功时序列化对象/数组，失败时返回 `parse_ok=false` 和非空安全 reply，失败分支不得写数据库。
+
+当前状态：代码和接口已确认；提交前执行成功与失败两组单节点测试。
+
 ## 四、下一步
 
-下一次只讨论第 7 个节点：`WF03_C01_解析模型输出` 的输入、输出、代码、测试输入和预期结果。
+下一次只讨论第 8 个节点：`WF03_解析是否成功` 分支器。
