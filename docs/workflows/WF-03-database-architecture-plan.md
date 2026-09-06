@@ -499,6 +499,18 @@ C01 校验十个顶层字段、用户原话、状态组合、完成条件及 war
 
 完成检查：引用 C01 的 `parse_ok`；Boolean `true`；成功去 DB05；失败去统一回复；失败路径不写库。
 
+### 第 9 个节点：`WF03_DB05_更新冒险状态`
+
+连接：`WF03_解析是否成功.如果 → WF03_DB05_更新冒险状态`。数据库为 `university_planner / wf03_survival_adventure_records`，表单处理数据，处理模式为更新数据。
+
+数据范围：`adventure_version` 大于输入值 `0`。
+
+更新字段：`adventure_status←C01.adventure_status`、`adventure_draft←C01.adventure_draft_json`、`adventure_confirmed←C01.adventure_confirmed_json`、`last_user_intent←C01.last_user_intent`、`warnings←C01.warnings_json`。
+
+不更新 `adventure_version`、系统字段、公共路由字段或 reply。JSON 字段只能引用 C01 的 `_json` 输出，不能引用模型原始 output。后续预留连接 `WF03_C02_合并路由状态`。
+
+当前状态：架构与配置已确认并归档；平台实际搭建当前不作要求。
+
 ## 四、下一步
 
-下一次只讨论第 9 个节点：`WF03_DB05_更新冒险状态`。
+下一次只讨论第 10 个节点：`WF03_C02_合并路由状态`。
