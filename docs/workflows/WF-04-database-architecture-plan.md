@@ -956,6 +956,86 @@ C02 遇到异常直接中断，不输出危险的空完成列表供 DB08 写入�
 - [ ] 异常处理采用直接中断。
 - [ ] 没有增加新的保护分支器。
 
+### 第 13 个节点：`WF04_DB08_更新路由状态`
+
+#### 连线
+
+```text
+WF04_C02_合并路由状态
+→ WF04_DB08_更新路由状态
+→ WF04_写入 last_reply
+```
+
+#### 节点基础设置
+
+| 设置项 | 配置 |
+|---|---|
+| 节点类型 | 数据库 |
+| 模式 | 表单处理数据 |
+| 数据库 | `university_planner` |
+| 数据表 | `agent_runtime_states` |
+| 处理模式 | 更新数据 |
+| 输出 | 保持默认的 `isSuccess`、`message`、`outputList` |
+
+#### 设置数据范围
+
+| 表字段 | 条件 | 值类型 | 比较值 |
+|---|---|---|---|
+| `schema_version` | 等于 | 输入 | `mvp-1.1` |
+
+这里不能使用 `state_version > 0`，也不能使用 WF-04 模块表中的 `recommendation_version`。
+
+#### 更新字段
+
+| 公共路由表字段 | 值类型 | 引用来源 |
+|---|---|---|
+| `current_workflow` | 引用 | `WF04_C01_解析模型输出.current_workflow` |
+| `current_status` | 引用 | `WF04_C01_解析模型输出.current_status` |
+| `next_workflow` | 引用 | `WF04_C01_解析模型输出.next_workflow` |
+| `completed_workflows` | 引用 | `WF04_C02_合并路由状态.completed_workflows_json` |
+| `state_version` | 引用 | `WF04_C02_合并路由状态.state_version_next` |
+
+#### 不更新的字段
+
+- `schema_version`
+- `profile_status`
+- WF-04 recommendation 字段
+- `last_user_intent`
+- `warnings`
+- `reply`
+- 系统自动字段
+
+#### 业务作用
+
+DB07 已保存 WF-04 自身推荐结果；DB08 只更新当前工作流、当前状态、下一工作流、去重后的完成列表和递增后的公共路由版本。
+
+#### 禁止事项与易错点
+
+1. `completed_workflows` 必须引用 C02，不能直接引用 C01。
+2. `state_version` 必须引用 C02 的递增结果。
+3. 三个路由字段必须引用 C01。
+4. WF-04 无权更新 `profile_status`。
+5. 不得把 WF-04 模块字段写入公共路由表。
+6. 不得保存 `reply`。
+7. DB08 后进入共享回复写入节点，不能直接占用唯一结束节点。
+
+#### 当前状态
+
+- 架构与配置：已讨论确认。
+- GitHub 归档：已记录。
+- 星辰平台实际搭建：当前不作要求。
+
+#### 完成检查
+
+- [ ] 数据表选择 `agent_runtime_states`。
+- [ ] 处理模式为更新数据。
+- [ ] 数据范围为 `schema_version = mvp-1.1`。
+- [ ] 三个路由字段引用 C01。
+- [ ] 完成列表和版本引用 C02。
+- [ ] 没有更新 `profile_status`。
+- [ ] 没有写入业务字段或 reply。
+- [ ] 后续预留连接 `WF04_写入 last_reply`。
+
 ## 八、下一步
 
-下一次只讨论第 13 个节点：`WF04_DB08_更新路由状态`。该节点确认前不提前归档具体配置。
+下一次只讨论第 14 个节点：`WF04_写入 last_reply`。该节点确认前不提前归档具体配置。
