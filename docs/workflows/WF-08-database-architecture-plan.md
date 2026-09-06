@@ -647,6 +647,87 @@ WF08_DB05_读取当前复盘状态
 - [ ] 不再传递或输出完整 state。
 - [ ] 没有增加主规划或任务硬门槛。
 
+### 第 8 个节点：`WF08_C01_解析模型输出`
+
+#### 连线
+
+```text
+WF08_LLM_成长复盘
+→ WF08_C01_解析模型输出
+→ WF08_解析是否成功
+```
+
+#### 节点类型与输入
+
+节点类型选择代码节点，语言使用 Python。
+
+| 参数名 | 类型 | 引用来源 |
+|---|---|---|
+| `model_output` | String | `WF08_LLM_成长复盘.output` |
+| `user_input` | String | `开始.AGENT_USER_INPUT` |
+
+#### 输出
+
+| 参数名 | 类型 | 作用 |
+|---|---|---|
+| `parse_ok` | Boolean | 是否通过全部解析与业务校验 |
+| `error_message` | String | 失败原因；成功时为空字符串 |
+| `reply` | String | 写入共享 `last_reply` 的用户回复 |
+| `current_workflow` | String | 固定为 `WF-08` |
+| `current_status` | String | 本轮公共路由状态 |
+| `last_user_intent` | String | 用户本轮原话 |
+| `review_status` | String | WF-08 模块状态 |
+| `review_draft_json` | String | 压缩后的复盘草稿 JSON |
+| `review_confirmed_json` | String | 压缩后的已确认复盘 JSON |
+| `next_workflow` | String | `WF-08` 或 `WF-12` |
+| `completed_workflow_add` | String | 空字符串或 `WF-08` |
+| `warnings_json` | String | 压缩后的警告数组 JSON |
+
+#### 独立代码文件
+
+完整可复制代码保存在：[WF-08 C01 解析模型输出](code/WF-08-C01-parse-model-output.py)。不得从聊天记录手工拼接代码。
+
+#### 核心校验
+
+1. 模型输出必须恰好包含约定的十个顶层字段。
+2. `current_workflow` 必须为 `WF-08`，`last_user_intent` 必须与 `user_input` 完全一致。
+3. 推荐值只允许 `continue`、`adjust`、`consider_switch`。
+4. collecting 阶段的推荐必须为空，不能提前下结论。
+5. 完整复盘至少包含一项用户明确事实或已确认行为证据。
+6. awaiting_confirmation 必须存在完整 draft；complete 必须清空 draft、保留完整 confirmed。
+7. 只有 complete 才能输出 `completed_workflow_add=WF-08` 并进入 `WF-12`。
+8. warnings 必须是最多三项的不重复字符串数组。
+9. 支持清除模型可能附带的 JSON 代码围栏。
+10. 任一校验失败时 `parse_ok=false`，返回非空安全回复，不允许进入写库成功路径。
+
+#### 已执行测试
+
+| 场景 | 预期 | 结果 |
+|---|---|---|
+| collecting 且未给推荐 | 通过 | 通过 |
+| 完整 continue 复盘 | 通过 | 通过 |
+| 完整 adjust 复盘 | 通过 | 通过 |
+| 正式确认完成 | 通过 | 通过 |
+| 缺少事实和行为证据 | 拒绝 | 拒绝 |
+| 使用中文推荐值 | 拒绝 | 拒绝 |
+| collecting 提前给出推荐 | 拒绝 | 拒绝 |
+| complete 使用错误路由 | 拒绝 | 拒绝 |
+
+#### 当前状态
+
+- 节点合同、独立代码和八组测试：已讨论确认。
+- GitHub 归档：已记录。
+- 星辰平台实际搭建：当前不作要求。
+
+#### 完成检查
+
+- [ ] 两个输入参数名称、类型和引用来源完全一致。
+- [ ] 十二个输出参数全部建立，类型正确。
+- [ ] Python 代码从独立文件整体复制。
+- [ ] `parse_ok` 必须设置为 Boolean。
+- [ ] 后续连接解析成功分支器。
+- [ ] 解析失败路径不得写入模块表或公共路由表。
+
 ## 十、下一步
 
-下一次只讨论第 8 个节点：`WF08_C01_解析模型输出`。该节点确认前不提前归档具体配置。
+下一次只讨论第 9 个节点：`WF08_解析是否成功`。该节点确认前不提前归档具体配置。
