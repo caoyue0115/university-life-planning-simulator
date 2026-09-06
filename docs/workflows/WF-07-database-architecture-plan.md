@@ -651,6 +651,90 @@ WF07_DB05_读取当前任务状态
 - [ ] 不再传递或输出完整 state。
 - [ ] 没有增加画像或主规划硬门槛。
 
+### 第 8 个节点：`WF07_C01_解析模型输出`
+
+#### 连线
+
+```text
+WF07_LLM_学期任务
+→ WF07_C01_解析模型输出
+→ WF07_解析是否成功
+```
+
+#### 输入
+
+| 参数名 | 引用来源 | 类型 |
+|---|---|---|
+| `model_output` | `WF07_LLM_学期任务.output` | String |
+| `user_input` | `开始.AGENT_USER_INPUT` | String |
+
+#### 输出
+
+| 输出变量 | 类型 |
+|---|---|
+| `parse_ok` | Boolean |
+| `error_message` | String |
+| `reply` | String |
+| `current_workflow` | String |
+| `current_status` | String |
+| `last_user_intent` | String |
+| `task_status` | String |
+| `task_draft_json` | String |
+| `task_confirmed_json` | String |
+| `next_workflow` | String |
+| `completed_workflow_add` | String |
+| `warnings_json` | String |
+
+#### 完整代码
+
+完整可复制代码保存在：[WF-07 C01 解析代码](code/WF-07-C01-parse-model-output.py)。
+
+代码严格校验十个顶层字段、用户原话、状态和路由组合、task_id 唯一性、任务数量、优先级、成功标准、预期证据、完成证据和延期信息；成功时把 draft、confirmed、warnings 序列化为紧凑 String；失败时返回 `parse_ok=false` 和非空安全回复。
+
+失败安全回复：
+
+```text
+抱歉，刚才的学期任务结果格式异常，请再发送一次，我会继续为你处理。
+```
+
+#### 单节点测试
+
+| 测试 | 结果 |
+|---|---|
+| 首次生成 3 个任务 | 通过 |
+| 查看已有 confirmed | 通过 |
+| 带实际证据完成任务并生成变更草稿 | 通过 |
+| 确认任务草稿 | 通过 |
+| 完成任务但没有实际证据 | 正确拦截 |
+| 延期但没有延期原因 | 正确拦截 |
+| task_id 重复 | 正确拦截 |
+
+#### 禁止事项与易错点
+
+1. `parse_ok` 必须声明为 Boolean。
+2. 三个 JSON 写库输出必须声明为 String。
+3. 不得继续使用旧变量提取器。
+4. 失败分支不能进入任务数据库更新节点。
+5. 不得直接解析并写入大模型原始 `output`。
+6. 查看已确认任务和确认新草稿是两种不同的 complete 路由，代码已分别校验。
+
+#### 当前状态
+
+- 代码、输入、输出和接口：已讨论确认。
+- 单节点测试：七组正常与异常样例均符合预期。
+- GitHub 归档：已记录。
+- 星辰平台实际搭建：当前不作要求。
+
+#### 完成检查
+
+- [ ] 两个输入名称和引用来源正确。
+- [ ] 十二个输出名称和类型正确。
+- [ ] `parse_ok` 为 Boolean。
+- [ ] 三个 JSON 输出为 String。
+- [ ] 失败时 reply 非空。
+- [ ] 失败路径不写数据库。
+- [ ] 后续预留连接 `WF07_解析是否成功`。
+
 ## 九、下一步
 
-下一次只讨论第 8 个节点：`WF07_C01_解析模型输出`。该节点确认前不提前归档具体配置。
+下一次只讨论第 9 个节点：`WF07_解析是否成功`。该节点确认前不提前归档具体配置。
