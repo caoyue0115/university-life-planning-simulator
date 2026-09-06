@@ -639,6 +639,78 @@ WF06_DB05_读取当前主规划状态
 - GitHub 归档：已记录。
 - 星辰平台实际搭建：当前不作要求。
 
+### 第 8 个节点：`WF06_C01_解析模型输出`
+
+#### 连线
+
+```text
+WF06_LLM_主规划
+→ WF06_C01_解析模型输出
+→ WF06_解析是否成功
+```
+
+#### 输入
+
+| 参数名 | 引用来源 | 类型 |
+|---|---|---|
+| `model_output` | `WF06_LLM_主规划.output` | String |
+| `user_input` | `开始.AGENT_USER_INPUT` | String |
+
+#### 输出
+
+| 输出变量 | 类型 |
+|---|---|
+| `parse_ok` | Boolean |
+| `error_message` | String |
+| `reply` | String |
+| `current_workflow` | String |
+| `current_status` | String |
+| `last_user_intent` | String |
+| `plan_status` | String |
+| `plan_draft_json` | String |
+| `plan_confirmed_json` | String |
+| `next_workflow` | String |
+| `completed_workflow_add` | String |
+| `warnings_json` | String |
+
+#### 完整代码
+
+完整可复制代码保存在：[WF-06 C01 解析代码](code/WF-06-C01-parse-model-output.py)。
+
+代码严格校验十个顶层字段、状态与路由组合、用户原话、collecting 草稿、完整规划的 3～4 个目标、目标子字段、week 1～4 和完成状态；成功时把 draft、confirmed、warnings 序列化为紧凑 String；失败时返回 `parse_ok=false` 和非空安全回复。
+
+失败安全回复：
+
+```text
+抱歉，刚才的主规划结果格式异常，请再发送一次，我会继续为你处理。
+```
+
+#### 单节点测试
+
+| 测试 | 结果 |
+|---|---|
+| 换路径 collecting 草稿 | 通过 |
+| 完整待确认主规划 | 通过 |
+| 确认后的 complete 状态 | 通过 |
+| 缺少第四周的非法计划 | 正确拦截 |
+
+#### 当前状态
+
+- 代码、输入、输出和接口：已讨论确认。
+- 单节点测试：四组样例均符合预期。
+- GitHub 归档：已记录。
+- 星辰平台实际搭建：当前不作要求。
+
+#### 完成检查
+
+- [ ] 两个输入名称正确。
+- [ ] 十二个输出名称和类型正确。
+- [ ] `parse_ok` 为 Boolean。
+- [ ] collecting 与完整规划使用不同校验强度。
+- [ ] 失败时 reply 非空。
+- [ ] 失败路径不写数据库。
+- [ ] 后续预留连接 `WF06_解析是否成功`。
+
 ## 九、下一步
 
-下一次只讨论第 8 个节点：`WF06_C01_解析模型输出`。代码、输入、输出和测试结果在确认前不归档推送。
+下一次只讨论第 9 个节点：`WF06_解析是否成功`。该节点确认前不提前归档具体配置。
