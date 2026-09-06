@@ -231,6 +231,75 @@ M03 MAIN 总分支器的 WF-06 出口
 - [ ] 没有画像硬门槛。
 - [ ] 默认输出保持不变。
 
+### 第 2 个节点：`WF06_DB02_读取五路径推荐`
+
+#### 前后连线
+
+```text
+WF06_DB01_读取画像状态
+→ WF06_DB02_读取五路径推荐
+```
+
+本节点完成后先停止；下一节点单独讨论。
+
+#### 节点基础设置
+
+| 设置项 | 配置 |
+|---|---|
+| 节点类型 | 数据库 |
+| 模式 | 表单处理数据 |
+| 数据库 | `university_planner` |
+| 数据表 | `wf04_path_recommendation_records` |
+| 处理模式 | 查询数据 |
+| 查询上限 | `1` |
+| 排序 | 留空 |
+| 输出 | 保持默认的 `isSuccess`、`message`、`outputList` |
+
+#### 设置数据范围
+
+| 表字段 | 条件 | 值类型 | 比较值 |
+|---|---|---|---|
+| `recommendation_version` | 大于 | 输入 | `0` |
+
+#### 查询结果字段
+
+- `recommendation_status`
+- `recommendation_confirmed`
+- `recommendation_version`
+
+不读取 `recommendation_draft`。
+
+#### 业务作用
+
+WF-06 优先使用已确认的 WF-04 推荐结果：`primary_route` 作为主路径，`alternative_routes` 作为备选路径，五路径中的证据、空档、风险和行动建议可作为规划依据。查询不到记录或 confirmed 为空时仍继续，回退使用 WF-01 已确认画像，并在 warnings 说明缺少路径推荐结果。
+
+#### 禁止事项与易错点
+
+1. `recommendation_version > 0` 只表示记录存在，不表示推荐已确认。
+2. 后续大模型必须检查非空 `recommendation_confirmed`。
+3. 不得读取或修改 `recommendation_draft`。
+4. 不得增加“没有 WF-04 就返回 WF-04”的分支。
+5. 本节点只查询，不写入数据。
+6. 不得误选 WF-06 自身主规划表。
+7. 默认输出不得修改。
+
+#### 当前状态
+
+- 架构与配置：已讨论确认。
+- GitHub 归档：已记录。
+- 星辰平台实际搭建：当前不作要求。
+
+#### 完成检查
+
+- [ ] 上游连接 `WF06_DB01_读取画像状态`。
+- [ ] 数据表选择 `wf04_path_recommendation_records`。
+- [ ] 数据范围为 `recommendation_version > 0`。
+- [ ] 查询上限为 `1`。
+- [ ] 只勾选 `recommendation_status`、`recommendation_confirmed`、`recommendation_version`。
+- [ ] 没有读取 draft。
+- [ ] 没有增加 WF-04 前置门槛。
+- [ ] 默认输出保持不变。
+
 ## 九、下一步
 
-下一次只讨论第 2 个节点：读取 WF-04 已确认五路径推荐。该节点确认前不提前归档具体配置。
+下一次只讨论第 3 个节点：读取 WF-06 自身主规划状态。该节点确认前不提前归档具体配置。
