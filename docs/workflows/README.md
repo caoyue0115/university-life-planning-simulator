@@ -20,8 +20,11 @@ WF-01～WF-12 的节点页面按[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md
 
 ## 2. 文件导航
 
+> 当前数据库链路改造以 [WF-03～WF-12 数据库架构搭建总手册](WF-03-to-WF-12-database-architecture-playbook.md) 为讨论与实施基线。该手册记录了 MAIN、WF-01、WF-02 已验证的新架构、共享回复链路、逐节点模板和已踩过的坑；其中 WF-05 按当前产品约定不再创建。下表中的旧 WF-05 资料暂时保留，仅作为历史资料，等待后续统一清理。
+
 | 文件 | 用途 |
 |---|---|
+| [WF-03～WF-12 数据库架构搭建总手册](WF-03-to-WF-12-database-architecture-playbook.md) | 当前新分支的架构基线、逐节点搭建规则和验收标准 |
 | [平台 UI 配置契约](PLATFORM-UI-CONTRACT.md) | 截图已确认的节点页面字段、固定输出和操作位置 |
 | [共享协议](SHARED-CONTRACTS.md) | 统一变量、状态、确认与写入规则 |
 | [工作流模板](WORKFLOW-TEMPLATE.md) | 新增工作流时直接复制 |
