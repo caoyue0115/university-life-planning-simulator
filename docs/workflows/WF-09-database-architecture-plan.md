@@ -703,4 +703,156 @@ WF09_DB06_读取当前履历素材状态
 - [ ] 没有增加画像、任务或复盘硬门槛。
 - [ ] 没有把计划、推断或 expected_evidence 当作履历事实。
 
-下一次只讨论第 9 个节点：`WF09_C01_解析模型输出`。该节点确认前不提前归档具体配置。
+### 第 9 个节点：`WF09_C01_解析模型输出`
+
+#### 连线、输入与输出
+
+```text
+WF09_LLM_履历素材
+→ WF09_C01_解析模型输出
+→ WF09_解析是否成功
+```
+
+输入：`model_output:String` 引用大模型 `output`；`user_input:String` 引用开始节点 `AGENT_USER_INPUT`。
+
+输出：
+
+| 变量 | 类型 |
+|---|---|
+| `parse_ok` | Boolean |
+| `error_message` | String |
+| `reply` | String |
+| `current_workflow` | String |
+| `current_status` | String |
+| `last_user_intent` | String |
+| `asset_status` | String |
+| `asset_draft_json` | String |
+| `asset_confirmed_json` | String |
+| `next_workflow` | String |
+| `completed_workflow_add` | String |
+| `warnings_json` | String |
+
+完整代码保存在：[WF-09 C01 解析代码](code/WF-09-C01-parse-model-output.py)。代码严格校验十个顶层字段、状态组合、事实门禁、规范键名、条目编号、质量状态、数组容量与确认路由；失败时返回安全回复且禁止写库。
+
+单节点测试已覆盖 collecting、awaiting_confirmation、complete、无证明却标记可用、缺少角色、重复编号、错误 confirmed 键和错误完成路由，结果全部符合预期。
+
+#### 禁止事项与完成检查
+
+- 不得引用大模型以外的输出作为 `model_output`。
+- 十二个输出必须全部建立，`parse_ok` 必须为 Boolean。
+- draft、confirmed、warnings 必须使用三个 `_json` String 输出写库。
+- 解析失败路径不得更新任何数据库。
+- [ ] 独立 Python 文件整体复制并使用节点单输入测试运行。
+- [ ] 后续连接解析是否成功分支器。
+
+### 第 10 个节点：`WF09_解析是否成功`
+
+节点类型为分支器，引用 `WF09_C01_解析模型输出.parse_ok`，条件为等于 Boolean `true`。
+
+```text
+如果 → WF09_DB07_更新履历素材状态
+否则 → WF09_写入_last_reply
+```
+
+- 比较值不能使用字符串 `"true"`。
+- 否则路径直接使用 C01 的安全 reply，不经过任何数据库更新。
+- [ ] 如果出口进入 DB07；否则出口进入共享回复节点。
+
+### 第 11 个节点：`WF09_DB07_更新履历素材状态`
+
+数据库选择 `university_planner`，表选择 `wf09_resume_asset_records`，处理模式为更新数据。数据范围：`asset_version` 大于数字 `0`。
+
+更新字段：
+
+| 表字段 | 引用来源 |
+|---|---|
+| `asset_status` | `WF09_C01_解析模型输出.asset_status` |
+| `asset_draft` | `WF09_C01_解析模型输出.asset_draft_json` |
+| `asset_confirmed` | `WF09_C01_解析模型输出.asset_confirmed_json` |
+| `last_user_intent` | `WF09_C01_解析模型输出.last_user_intent` |
+| `warnings` | `WF09_C01_解析模型输出.warnings_json` |
+
+不更新 `asset_version`、公共路由字段或 reply。
+
+```text
+WF09_解析是否成功.如果
+→ WF09_DB07_更新履历素材状态
+→ WF09_C02_合并路由状态
+```
+
+- [ ] 五个字段全部引用 C01 对应输出。
+- [ ] 原始大模型 output 不直接写库。
+
+### 第 12 个节点：`WF09_C02_合并路由状态`
+
+输入：
+
+| 参数名 | 引用来源 |
+|---|---|
+| `route_state_rows` | MAIN 当前路由状态查询节点 DB03 的 `outputList` |
+| `completed_workflow_add` | `WF09_C01_解析模型输出.completed_workflow_add` |
+
+输出：`merge_ok:Boolean`、`error_message:String`、`completed_workflows_json:String`、`state_version_next:Integer`。
+
+完整代码保存在：[WF-09 C02 合并路由代码](code/WF-09-C02-merge-route-state.py)。代码保留并去重历史完成列表，只允许按需追加 WF-09，并将公共版本加一；异常直接抛错中断，不增加合并成功分支器。
+
+测试已覆盖正常追加、重复去重、空完成标记、空路由记录和错误工作流标记，结果全部符合预期。
+
+```text
+WF09_DB07_更新履历素材状态
+→ WF09_C02_合并路由状态
+→ WF09_DB08_更新路由状态
+```
+
+- [ ] 路由记录必须引用 MAIN DB03，不能引用 WF-09 模块表或路由大模型文本。
+- [ ] 四个输出名称和类型正确。
+
+### 第 13 个节点：`WF09_DB08_更新路由状态`
+
+数据库选择 `university_planner`，表选择 `agent_runtime_states`，处理模式为更新数据。数据范围：`schema_version` 等于 `mvp-1.1`。
+
+更新字段：
+
+| 表字段 | 引用来源 |
+|---|---|
+| `current_workflow` | `WF09_C01_解析模型输出.current_workflow` |
+| `current_status` | `WF09_C01_解析模型输出.current_status` |
+| `next_workflow` | `WF09_C01_解析模型输出.next_workflow` |
+| `completed_workflows` | `WF09_C02_合并路由状态.completed_workflows_json` |
+| `state_version` | `WF09_C02_合并路由状态.state_version_next` |
+
+不更新 `schema_version`、`profile_status`、WF-09 业务字段或 reply。
+
+```text
+WF09_C02_合并路由状态
+→ WF09_DB08_更新路由状态
+→ WF09_写入_last_reply
+```
+
+- [ ] 三个路由字段引用 C01，完成列表和版本引用 C02。
+- [ ] 数据范围不能使用 `state_version > 0` 或 `asset_version`。
+
+### 第 14 个节点：`WF09_写入_last_reply`
+
+节点类型为变量存储器，只写共享会话变量：
+
+```text
+last_reply = WF09_C01_解析模型输出.reply
+```
+
+两条入口：
+
+```text
+成功：WF09_DB08_更新路由状态 → WF09_写入_last_reply
+失败：WF09_解析是否成功.否则 → WF09_写入_last_reply
+```
+
+后续统一连接现有 N90 和唯一结束节点。不修改 N90，不新建第二个结束节点。
+
+- [ ] 只写一个共享变量。
+- [ ] 成功和失败两条路径均已接入。
+- [ ] 引用 C01.reply，不引用大模型原始 output 或数据库默认输出。
+
+## 十一、WF-09 归档完成状态
+
+WF-09 的纠正后业务基线、六字段模块表、十四个节点、数据库版完整提示词、C01 解析代码和 C02 路由合并代码均已完成归档。星辰平台实际搭建和整链运行测试仍由后续实施同学执行。
