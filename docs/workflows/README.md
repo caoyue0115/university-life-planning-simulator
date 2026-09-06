@@ -45,6 +45,7 @@ WF-01～WF-12 的节点页面按[平台 UI 配置契约](PLATFORM-UI-CONTRACT.md
 | [WF-11 数据库架构规划](WF-11-database-architecture-plan.md) | 当前新分支中 WF-11 的业务、字段与十一节点完整配置 |
 | [WF-11 微习惯](WF-11-micro-habits.md) | 记录习惯、记账和基础健身 |
 | [WF-12 会话复盘](WF-12-session-recap.md) | 保存变化并生成下次入口 |
+| [WF-12 数据库架构规划](WF-12-database-architecture-plan.md) | 当前新分支中 WF-12 的业务、字段与二十一节点完整配置 |
 
 ## 3. 推荐搭建顺序
 
