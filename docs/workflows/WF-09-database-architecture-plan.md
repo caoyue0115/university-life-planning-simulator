@@ -649,4 +649,58 @@ DB04 只探测记录是否存在；DB06 是两条路径汇合后的正式统一�
 - [ ] 六个查询字段全部选择。
 - [ ] 后续预留连接 WF-09 大模型。
 
-下一次只讨论第 8 个节点：`WF09_LLM_履历素材`。该节点确认前不提前归档具体配置。
+### 第 8 个节点：`WF09_LLM_履历素材`
+
+#### 连线与节点设置
+
+```text
+WF09_DB06_读取当前履历素材状态
+→ WF09_LLM_履历素材
+→ WF09_C01_解析模型输出
+```
+
+保持当前 Kimi-K2.5 模型，关闭对话历史；输出格式为 text，唯一输出为 `output:String`。
+
+#### 输入
+
+| 参数名 | 引用来源 |
+|---|---|
+| `user_input` | `开始.AGENT_USER_INPUT` |
+| `router_context` | `N01 路由大模型.output` |
+| `profile_state_rows` | `WF09_DB01_读取画像状态.outputList` |
+| `task_state_rows` | `WF09_DB02_读取学期任务状态.outputList` |
+| `review_state_rows` | `WF09_DB03_读取成长复盘状态.outputList` |
+| `resume_state_rows` | `WF09_DB06_读取当前履历素材状态.outputList` |
+
+#### 完整提示词
+
+系统提示词、用户提示词及整体复制文本单独保存在：[WF-09 数据库版大模型提示词](prompts/WF-09-database-llm-prompts.md)。执行同学必须整体复制，不得继续使用旧版完整 state 提示词。
+
+#### 已确认边界
+
+- 事实门禁、禁止伪造、无数字不编数字、无证明不编证明等原规则全部保留。
+- 画像只用于背景；只有已完成任务的 actual_evidence，以及复盘的 explicit_new_facts 和 behavior_evidence 可作为历史事实来源。
+- 任一上游记录缺失都继续运行，不回退上游模块。
+- confirmed 统一使用 `entries`，单条结构统一使用“目标”。
+- 模型只输出十个增量字段，不输出完整 state 或 completed_workflows。
+- 输出仍为单一 String `output`。
+- confirmed.entries 达到五条时不得静默删除旧条目，必须询问用户要替换哪条。
+
+#### 当前状态
+
+- 输入、输出和完整提示词：已讨论确认。
+- GitHub 归档：已记录。
+- 星辰平台实际搭建：当前不作要求。
+
+#### 完成检查
+
+- [ ] 六个输入参数全部添加且使用引用。
+- [ ] 自身状态引用 DB06，不引用 DB04。
+- [ ] 输出仍只有 `output:String`。
+- [ ] 对话历史关闭。
+- [ ] 系统提示词和用户提示词整体替换。
+- [ ] 不再传递或输出完整 state。
+- [ ] 没有增加画像、任务或复盘硬门槛。
+- [ ] 没有把计划、推断或 expected_evidence 当作履历事实。
+
+下一次只讨论第 9 个节点：`WF09_C01_解析模型输出`。该节点确认前不提前归档具体配置。
