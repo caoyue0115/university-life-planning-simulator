@@ -325,4 +325,70 @@ WF09_DB01_读取画像状态
 - [ ] 没有增加 WF-07 硬门槛。
 - [ ] 后续连接 DB03。
 
-下一次只讨论第 3 个节点：`WF09_DB03_读取成长复盘状态`。该节点确认前不提前归档具体配置。
+### 第 3 个节点：`WF09_DB03_读取成长复盘状态`
+
+#### 前后连线
+
+```text
+WF09_DB02_读取学期任务状态
+→ WF09_DB03_读取成长复盘状态
+→ WF09_DB04_读取履历素材状态
+```
+
+#### 节点基础设置
+
+| 设置项 | 配置 |
+|---|---|
+| 节点类型 | 数据库 |
+| 模式 | 表单处理数据 |
+| 数据库 | `university_planner` |
+| 数据表 | `wf08_growth_review_records` |
+| 处理模式 | 查询数据 |
+| 查询上限 | `1` |
+| 排序 | 留空 |
+| 输出 | 保持默认的 `isSuccess`、`message`、`outputList` |
+
+#### 设置数据范围
+
+| 表字段 | 条件 | 值类型 | 比较值 |
+|---|---|---|---|
+| `review_version` | 大于 | 输入 | 数字 `0` |
+
+#### 查询结果字段
+
+- `review_status`
+- `review_confirmed`
+- `review_version`
+
+不读取 `review_draft`。
+
+#### 业务作用
+
+读取 WF-08 已确认复盘。后续大模型只能把 `explicit_new_facts` 和 `behavior_evidence` 作为候选履历事实；`agent_inferences`、推荐、调整建议和待验证问题不能作为事实。查询为空时 WF-09 仍继续运行。
+
+#### 禁止事项与易错点
+
+1. 不得读取或使用未确认 `review_draft`。
+2. `review_version > 0` 只表示记录存在，不表示复盘已确认。
+3. 不得把 `agent_inferences` 当成用户事实。
+4. 不得把 `recommended_adjustments` 或 `questions_to_verify` 写成已完成经历。
+5. 不得增加“无复盘返回 WF-08”的硬门槛。
+6. 本节点只查询，不写入任何数据。
+
+#### 当前状态
+
+- 架构与配置：已讨论确认。
+- GitHub 归档：已记录。
+- 星辰平台实际搭建：当前不作要求。
+
+#### 完成检查
+
+- [ ] 上游连接 DB02。
+- [ ] 数据表选择 `wf08_growth_review_records`。
+- [ ] 数据范围为 `review_version > 0`。
+- [ ] 只读取 status、confirmed 和 version。
+- [ ] 没有读取 draft。
+- [ ] 没有增加 WF-08 硬门槛。
+- [ ] 后续连接 DB04。
+
+下一次只讨论第 4 个节点：`WF09_DB04_读取履历素材状态`。该节点确认前不提前归档具体配置。
