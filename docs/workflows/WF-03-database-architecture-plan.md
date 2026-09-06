@@ -511,6 +511,12 @@ C01 校验十个顶层字段、用户原话、状态组合、完成条件及 war
 
 当前状态：架构与配置已确认并归档；平台实际搭建当前不作要求。
 
+### 第 10 个节点：`WF03_C02_合并路由状态`
+
+连接：`WF03_DB05_更新冒险状态 → WF03_C02_合并路由状态`。输入为 `route_state_rows=MAIN DB03.outputList`、`completed_workflow_add=C01.completed_workflow_add`。输出为 `merge_ok:Boolean`、`error_message:String`、`completed_workflows_json:String`、`state_version_next:Integer`。
+
+完整代码：[WF-03 C02 合并路由代码](code/WF-03-C02-merge-route-state.py)。它保留并去重旧完成列表，只允许按需加入 WF-03，并把路由版本加一。失败占位值不得写入数据库。
+
 ## 四、下一步
 
-下一次只讨论第 10 个节点：`WF03_C02_合并路由状态`。
+下一次只讨论第 11 个节点：`WF03_路由合并是否成功`。
